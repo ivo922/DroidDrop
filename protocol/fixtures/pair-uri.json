@@ -1,0 +1,95 @@
+{
+  "valid": [
+    {
+      "name": "basic",
+      "uri": "droiddrop://pair?v=1&name=Mac&hosts=192.168.1.20&port=47321&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "expected": {
+        "name": "Mac",
+        "hosts": [
+          "192.168.1.20"
+        ],
+        "port": 47321,
+        "fingerprint": "vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8",
+        "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+      }
+    },
+    {
+      "name": "encoded_name_and_hosts",
+      "uri": "droiddrop://pair?v=1&name=Ivo%27s%20MacBook%20Pro%20%E2%9C%93&hosts=192.168.1.20%2C10.0.0.5&port=50001&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "expected": {
+        "name": "Ivo's MacBook Pro ✓",
+        "hosts": [
+          "192.168.1.20",
+          "10.0.0.5"
+        ],
+        "port": 50001,
+        "fingerprint": "vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8",
+        "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+      }
+    },
+    {
+      "name": "literal_plus_is_not_space_and_param_order_free",
+      "uri": "droiddrop://pair?fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&port=1&hosts=0.0.0.0,255.255.255.255&name=Mac+Mini&v=1&extra=ignored",
+      "expected": {
+        "name": "Mac+Mini",
+        "hosts": [
+          "0.0.0.0",
+          "255.255.255.255"
+        ],
+        "port": 1,
+        "fingerprint": "vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8",
+        "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "wrong_scheme",
+      "uri": "https://pair?v=1&name=Mac&hosts=192.168.1.20&port=47321&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    },
+    {
+      "name": "wrong_host",
+      "uri": "droiddrop://pairing?v=1&name=Mac&hosts=192.168.1.20&port=47321&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    },
+    {
+      "name": "version_2",
+      "uri": "droiddrop://pair?v=2&name=Mac&hosts=192.168.1.20&port=47321&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    },
+    {
+      "name": "missing_name",
+      "uri": "droiddrop://pair?v=1&hosts=192.168.1.20&port=47321&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    },
+    {
+      "name": "missing_fp",
+      "uri": "droiddrop://pair?v=1&name=Mac&hosts=192.168.1.20&port=47321&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    },
+    {
+      "name": "short_secret",
+      "uri": "droiddrop://pair?v=1&name=Mac&hosts=192.168.1.20&port=47321&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAAAAAAAAAAAAAAAAAAAAA"
+    },
+    {
+      "name": "port_zero",
+      "uri": "droiddrop://pair?v=1&name=Mac&hosts=192.168.1.20&port=0&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    },
+    {
+      "name": "port_too_big",
+      "uri": "droiddrop://pair?v=1&name=Mac&hosts=192.168.1.20&port=65536&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    },
+    {
+      "name": "host_octet_too_big",
+      "uri": "droiddrop://pair?v=1&name=Mac&hosts=192.168.1.256&port=47321&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    },
+    {
+      "name": "host_leading_zero",
+      "uri": "droiddrop://pair?v=1&name=Mac&hosts=192.168.01.2&port=47321&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    },
+    {
+      "name": "host_not_ipv4",
+      "uri": "droiddrop://pair?v=1&name=Mac&hosts=mac.local&port=47321&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    },
+    {
+      "name": "empty_hosts",
+      "uri": "droiddrop://pair?v=1&name=Mac&hosts=&port=47321&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    }
+  ]
+}

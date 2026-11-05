@@ -1,0 +1,18 @@
+.DS_Store
+
+# macOS
+macos/DroidDrop.xcodeproj/
+macos/build/
+macos/DroidDropKit/.build/
+macos/DroidDropKit/.swiftpm/
+
+# Android
+android/.gradle/
+android/.kotlin/
+android/**/build/
+android/local.properties
+android/.idea/
+*.iml
+
+# Python
+__pycache__/

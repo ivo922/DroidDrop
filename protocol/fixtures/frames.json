@@ -1,0 +1,70 @@
+{
+  "maxControlPayload": 524288,
+  "maxChunkData": 1048576,
+  "maxFrameLength": 1048601,
+  "valid": [
+    {
+      "name": "control_ping",
+      "hex": "00000017017b2274797065223a2270696e67222c226964223a377d",
+      "kind": "control",
+      "json": {
+        "type": "ping",
+        "id": 7
+      }
+    },
+    {
+      "name": "control_utf8",
+      "hex": "00000065017b2274797065223a22636c6970222c226964223a2235623263386639652d316433612d346537622d396336642d306131623263336434653566222c226d696d65223a22746578742f706c61696e222c2274657874223a2268c3a96c6c6f20f09f918b227d",
+      "kind": "control",
+      "json": {
+        "type": "clip",
+        "id": "5b2c8f9e-1d3a-4e7b-9c6d-0a1b2c3d4e5f",
+        "mime": "text/plain",
+        "text": "héllo 👋"
+      }
+    },
+    {
+      "name": "chunk_small",
+      "hex": "0000001e020f8e2d1c3b4a4c5d8e6f7a8b9c0d1e2f000000000000000000010203ff",
+      "kind": "chunk",
+      "transferId": "0f8e2d1c-3b4a-4c5d-8e6f-7a8b9c0d1e2f",
+      "offset": 0,
+      "dataHex": "00010203ff"
+    },
+    {
+      "name": "chunk_offset_above_32_bits",
+      "hex": "0000001a020f8e2d1c3b4a4c5d8e6f7a8b9c0d1e2f0000000100000005ab",
+      "kind": "chunk",
+      "transferId": "0f8e2d1c-3b4a-4c5d-8e6f-7a8b9c0d1e2f",
+      "offset": 4294967301,
+      "dataHex": "ab"
+    }
+  ],
+  "invalid": [
+    {
+      "name": "empty_frame",
+      "hex": "00000000",
+      "error": "empty_frame"
+    },
+    {
+      "name": "frame_too_large",
+      "hex": "0010001a02",
+      "error": "frame_too_large"
+    },
+    {
+      "name": "control_too_large",
+      "hex": "0008000201",
+      "error": "frame_too_large"
+    },
+    {
+      "name": "unknown_kind",
+      "hex": "0000000203aa",
+      "error": "unknown_kind"
+    },
+    {
+      "name": "chunk_without_data",
+      "hex": "0000001902000000000000000000000000000000000000000000000000",
+      "error": "chunk_too_short"
+    }
+  ]
+}

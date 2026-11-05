@@ -1,0 +1,28 @@
+{
+  "vectors": [
+    {
+      "name": "vector_1",
+      "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "serverCertificateHex": "7365727665722d63657274696669636174652d6465722d31",
+      "clientCertificateHex": "636c69656e742d63657274696669636174652d6465722d31",
+      "serverFingerprint": "vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8",
+      "clientFingerprint": "ZYGGElxyQhfhjUq6uZi3atjAQbSVHynFRX1rGHhrLfs",
+      "clientProof": "AMRG8s_pblBRYTTHSOavLxh2dgWEAJSVCAHmsrOPvqE",
+      "serverProof": "fw8_Xlp15sgdfC1pWwyOnMUJg62yYWSriimsvRrKaww",
+      "serverDisplayCode": "BDF8 0575 F444 C188",
+      "clientDisplayCode": "6581 8612 5C72 4217"
+    },
+    {
+      "name": "vector_2",
+      "secret": "9La7ZUgSnazxHBqcTf__79SqayH89Ol1TMA7cxy-fCU",
+      "serverCertificateHex": "7365727665722d63657274696669636174652d6465722d32",
+      "clientCertificateHex": "636c69656e742d63657274696669636174652d6465722d32",
+      "serverFingerprint": "iicKg6_lvwrpNKSu7D6jIkGBGoss1VnDT2PS49WPsq4",
+      "clientFingerprint": "Tv7eZgTxAArYs6LvnAq7rV_HP7FCFEy_O9WGN3sqCRI",
+      "clientProof": "EujbJw1F8vtD7fwZcOxjPEn1Un9eNvvQRyjZyl4Il40",
+      "serverProof": "oiYJhY9PSDPSS21IufEcRV5x_IDU3ip6MN4wqkPC-5Q",
+      "serverDisplayCode": "8A27 0A83 AFE5 BF0A",
+      "clientDisplayCode": "4EFE DE66 04F1 000A"
+    }
+  ]
+}
