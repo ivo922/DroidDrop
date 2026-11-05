@@ -23,6 +23,9 @@ data class PairUri(
         "secret" to secret,
     ).joinToString("&", prefix = "droiddrop://pair?") { (key, value) -> "$key=${percentEncode(value)}" }
 
+    override fun toString(): String =
+        "PairUri(name=$name, hosts=$hosts, port=$port, fingerprint=$fingerprint, secret=<redacted>)"
+
     companion object {
         private val unreserved = (('A'..'Z') + ('a'..'z') + ('0'..'9') + "-._~".toList()).toSet()
         private const val HEX = "0123456789ABCDEF"

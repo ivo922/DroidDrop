@@ -3,6 +3,7 @@ package dev.ivo.droiddrop.core
 import dev.ivo.droiddrop.core.pairing.PairUri
 import kotlinx.serialization.json.jsonObject
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -44,6 +45,14 @@ class PairUriTest {
         val text = PairUri("A+B C", listOf("10.0.0.1", "10.0.0.2"), 47321, fp, fp).toUriString()
         assertTrue(text.contains("name=A%2BB%20C"), text)
         assertTrue(text.contains("hosts=10.0.0.1%2C10.0.0.2"), text)
+    }
+
+    @Test
+    fun toStringRedactsSecret() {
+        val uri = PairUri.parse(fixture.list("valid").first().str("uri"))!!
+        val text = uri.toString()
+        assertFalse(text.contains(uri.secret), text)
+        assertTrue(text.contains(uri.fingerprint), text)
     }
 
     @Test
