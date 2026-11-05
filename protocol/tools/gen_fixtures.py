@@ -188,6 +188,8 @@ def pair_uri():
              "expected": basic},
             {"name": "unknown_param_without_equals", "uri": f"droiddrop://pair?{query}&extra",
              "expected": basic},
+            {"name": "empty_segments_ignored", "uri": f"droiddrop://pair?&{query.replace('&', '&&', 1)}&",
+             "expected": basic},
         ],
         "invalid": [
             {"name": "wrong_scheme", "uri": f"https://pair?v=1&name=Mac&hosts=192.168.1.20&port=47321&{base}"},
