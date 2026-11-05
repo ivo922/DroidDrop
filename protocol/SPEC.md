@@ -53,7 +53,7 @@ A control payload is a JSON object with a string member `type`. Rules:
 - A known type with a missing or invalid member, a payload that is not valid UTF-8 JSON, a JSON value that is not an object, or a missing/non-string `type` is a **protocol error**: the receiver MUST close the connection.
 - Encoders MUST omit absent optional members (never emit `null`). Decoders treat an optional member whose value is `null` as absent.
 - Integers are JSON numbers without fraction or exponent, range `0 … 2^53-1`.
-- "Valid JSON" means strict RFC 8259 with no extensions, plus: no byte-order mark, no duplicate member names in any object, and no unpaired surrogate escapes (`\ud800`). Anything else (trailing commas, `-0` as an integer, comments, unquoted literals) is a protocol error.
+- "Valid JSON" means strict RFC 8259 with no extensions, plus: no byte-order mark, no duplicate member names in any object, no unpaired surrogate escapes (`\ud800`), and nesting depth at most 64 (each object or array counts one level, the root object included). Anything else (trailing commas, `-0` as an integer, comments, unquoted literals) is a protocol error.
 
 Common member formats:
 
