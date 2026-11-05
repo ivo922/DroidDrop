@@ -75,7 +75,9 @@ class ConnectionService : Service() {
                     val identity = withContext(Dispatchers.IO) { AndroidIdentity.loadOrCreate() }
                     currentCoroutineContext().ensureActive()
                     val client = DroidDropClient(identity, deviceName())
-                    if (pairUri != null && !pair(client, pairUri)) return@withLock
+                    // A failed or cancelled scan must not drop an existing pairing.
+                    // Successful pair() falls through once; connectLoop stopSelfs only when the store is empty.
+                    if (pairUri != null && !pair(client, pairUri) && store.load() == null) return@withLock
                     connectLoop(client)
                 }
             }
