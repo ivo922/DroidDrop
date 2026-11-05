@@ -21,6 +21,8 @@ dependencies {
 }
 
 tasks.test {
+    val fixturesDir = rootProject.projectDir.resolve("../protocol/fixtures")
     useJUnitPlatform()
-    systemProperty("droiddrop.fixtures", rootProject.projectDir.resolve("../protocol/fixtures").absolutePath)
+    inputs.dir(fixturesDir).withPathSensitivity(PathSensitivity.RELATIVE)
+    systemProperty("droiddrop.fixtures", fixturesDir.absolutePath)
 }
