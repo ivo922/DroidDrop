@@ -138,6 +138,7 @@ def messages():
             {"name": "file_accept_bad_uuid", "raw": "{\"type\":\"file_accept\",\"transferId\":\"not-a-uuid\",\"offset\":0}"},
             {"name": "file_accept_negative_offset", "raw": "{\"type\":\"file_accept\",\"transferId\":\"" + tid + "\",\"offset\":-5}"},
             {"name": "ping_negative_zero", "raw": "{\"type\":\"ping\",\"id\":-0}"},
+            {"name": "negative_zero_in_unknown_member", "raw": "{\"type\":\"ping\",\"id\":1,\"x\":-0}"},
             {"name": "trailing_comma_object", "raw": "{\"type\":\"ping\",\"id\":1,}"},
             {"name": "trailing_comma_nested_array", "raw": "{\"type\":\"ping\",\"id\":1,\"x\":[1,]}"},
             {"name": "comment", "raw": "{\"type\":\"ping\",/*c*/\"id\":1}"},

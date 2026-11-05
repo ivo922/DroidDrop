@@ -334,6 +334,10 @@
       "raw": "{\"type\":\"ping\",\"id\":-0}"
     },
     {
+      "name": "negative_zero_in_unknown_member",
+      "raw": "{\"type\":\"ping\",\"id\":1,\"x\":-0}"
+    },
+    {
       "name": "trailing_comma_object",
       "raw": "{\"type\":\"ping\",\"id\":1,}"
     },
