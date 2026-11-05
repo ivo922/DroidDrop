@@ -11,8 +11,10 @@ object Pairing {
 
     fun fingerprint(certificateDer: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(certificateDer)
 
-    fun displayCode(fingerprint: ByteArray): String =
-        HexFormat.of().withUpperCase().formatHex(fingerprint, 0, 8).chunked(4).joinToString(" ")
+    fun displayCode(fingerprint: ByteArray): String {
+        require(fingerprint.size == 32) { "fingerprint must be 32 bytes" }
+        return HexFormat.of().withUpperCase().formatHex(fingerprint, 0, 8).chunked(4).joinToString(" ")
+    }
 
     fun clientProof(secret: ByteArray, serverFingerprint: ByteArray, clientFingerprint: ByteArray): ByteArray =
         hmac(secret, "client", serverFingerprint, clientFingerprint)
@@ -29,6 +31,9 @@ object Pairing {
     fun newSecret(): ByteArray = ByteArray(32).also(random::nextBytes)
 
     private fun hmac(secret: ByteArray, role: String, serverFingerprint: ByteArray, clientFingerprint: ByteArray): ByteArray {
+        require(secret.size == 32) { "secret must be 32 bytes" }
+        require(serverFingerprint.size == 32) { "server fingerprint must be 32 bytes" }
+        require(clientFingerprint.size == 32) { "client fingerprint must be 32 bytes" }
         val mac = Mac.getInstance("HmacSHA256")
         mac.init(SecretKeySpec(secret, "HmacSHA256"))
         mac.update("droiddrop-pair-v1|$role|".toByteArray(Charsets.US_ASCII))

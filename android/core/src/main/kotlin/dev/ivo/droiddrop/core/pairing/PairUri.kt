@@ -1,8 +1,6 @@
 package dev.ivo.droiddrop.core.pairing
 
 import java.io.ByteArrayOutputStream
-import java.net.URI
-import java.net.URISyntaxException
 import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.StandardCharsets.UTF_8
@@ -29,22 +27,25 @@ data class PairUri(
         private val unreserved = (('A'..'Z') + ('a'..'z') + ('0'..'9') + "-._~".toList()).toSet()
         private const val HEX = "0123456789ABCDEF"
 
+        private const val PREFIX = "droiddrop://pair?"
+        private val known = setOf("v", "name", "hosts", "port", "fp", "secret")
+        private val portPattern = Regex("[1-9][0-9]{0,4}")
+
         fun parse(text: String): PairUri? {
-            val uri = try { URI(text) } catch (e: URISyntaxException) { return null }
-            if (uri.scheme != "droiddrop" || uri.host != "pair") return null
-            val params = LinkedHashMap<String, String>()
-            for (part in (uri.rawQuery ?: return null).split('&')) {
+            if (!text.startsWith(PREFIX) || '#' in text || text.any { it !in '\u0021'..'\u007e' }) return null
+            val params = HashMap<String, String>()
+            for (part in text.substring(PREFIX.length).split('&')) {
                 val eq = part.indexOf('=')
-                if (eq < 0) continue
-                val key = percentDecode(part.substring(0, eq)) ?: return null
-                val value = percentDecode(part.substring(eq + 1)) ?: return null
-                params.putIfAbsent(key, value)
+                val key = percentDecode(if (eq < 0) part else part.substring(0, eq)) ?: return null
+                val value = if (eq < 0) null else percentDecode(part.substring(eq + 1)) ?: return null
+                if (key !in known) continue
+                if (value == null || params.put(key, value) != null) return null
             }
             if (params["v"] != "1") return null
             val name = params["name"]?.takeIf { it.isNotEmpty() } ?: return null
             val hosts = params["hosts"]?.split(',') ?: return null
             if (!hosts.all(::isIpv4)) return null
-            val port = params["port"]?.toIntOrNull()?.takeIf { it in 1..65_535 } ?: return null
+            val port = params["port"]?.takeIf(portPattern::matches)?.toInt()?.takeIf { it <= 65_535 } ?: return null
             val fingerprint = params["fp"]?.takeIf { Base64Url.decode32(it) != null } ?: return null
             val secret = params["secret"]?.takeIf { Base64Url.decode32(it) != null } ?: return null
             return PairUri(name, hosts, port, fingerprint, secret)

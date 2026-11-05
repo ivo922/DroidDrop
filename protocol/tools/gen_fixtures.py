@@ -163,6 +163,14 @@ def pair_uri():
     secret = b64url(bytes(range(32)))
     base = f"fp={fp}&secret={secret}"
     expected = {"fingerprint": fp, "secret": secret}
+    params = {"v": "v=1", "name": "name=Mac", "hosts": "hosts=192.168.1.20", "port": "port=47321",
+              "fp": f"fp={fp}", "secret": f"secret={secret}"}
+    query = "&".join(params.values())
+    basic = {"name": "Mac", "hosts": ["192.168.1.20"], "port": 47321, **expected}
+
+    def with_param(key, part):
+        return "droiddrop://pair?" + "&".join({**params, key: part}.values())
+
     return {
         "valid": [
             {"name": "basic", "uri": f"droiddrop://pair?v=1&name=Mac&hosts=192.168.1.20&port=47321&{base}",
@@ -173,6 +181,13 @@ def pair_uri():
             {"name": "literal_plus_is_not_space_and_param_order_free",
              "uri": f"droiddrop://pair?{base}&port=1&hosts=0.0.0.0,255.255.255.255&name=Mac+Mini&v=1&extra=ignored",
              "expected": {"name": "Mac+Mini", "hosts": ["0.0.0.0", "255.255.255.255"], "port": 1, **expected}},
+            {"name": "lowercase_hex_escape",
+             "uri": f"droiddrop://pair?v=1&name=%c3%a9&hosts=192.168.1.20&port=47321&{base}",
+             "expected": {"name": "é", "hosts": ["192.168.1.20"], "port": 47321, **expected}},
+            {"name": "unknown_param_repeated", "uri": f"droiddrop://pair?{query}&extra=1&extra=2",
+             "expected": basic},
+            {"name": "unknown_param_without_equals", "uri": f"droiddrop://pair?{query}&extra",
+             "expected": basic},
         ],
         "invalid": [
             {"name": "wrong_scheme", "uri": f"https://pair?v=1&name=Mac&hosts=192.168.1.20&port=47321&{base}"},
@@ -187,6 +202,27 @@ def pair_uri():
             {"name": "host_leading_zero", "uri": f"droiddrop://pair?v=1&name=Mac&hosts=192.168.01.2&port=47321&{base}"},
             {"name": "host_not_ipv4", "uri": f"droiddrop://pair?v=1&name=Mac&hosts=mac.local&port=47321&{base}"},
             {"name": "empty_hosts", "uri": f"droiddrop://pair?v=1&name=Mac&hosts=&port=47321&{base}"},
+            {"name": "port_plus", "uri": with_param("port", "port=+1")},
+            {"name": "port_leading_zero", "uri": with_param("port", "port=047321")},
+            {"name": "port_non_ascii_digits", "uri": with_param("port", "port=%D9%A4%D9%A7")},
+            {"name": "raw_non_ascii", "uri": with_param("name", "name=Mac✓")},
+            {"name": "userinfo", "uri": f"droiddrop://user@pair?{query}"},
+            {"name": "authority_port", "uri": f"droiddrop://pair:99?{query}"},
+            {"name": "empty_authority_port", "uri": f"droiddrop://pair:?{query}"},
+            {"name": "path", "uri": f"droiddrop://pair/?{query}"},
+            {"name": "uppercase_scheme", "uri": f"DROIDDROP://pair?{query}"},
+            {"name": "fragment", "uri": f"droiddrop://pair?{query}#frag"},
+            {"name": "duplicate_fp", "uri": f"droiddrop://pair?{query}&fp={fp}"},
+            {"name": "duplicate_fp_encoded_key", "uri": f"droiddrop://pair?{query}&%66p={fp}"},
+            {"name": "name_without_equals", "uri": with_param("name", "name")},
+            {"name": "malformed_escape_trailing", "uri": with_param("name", "name=Mac%")},
+            {"name": "malformed_escape_nonhex", "uri": with_param("name", "name=%zz")},
+            {"name": "truncated_utf8", "uri": with_param("name", "name=%E2%9C")},
+            {"name": "hosts_trailing_comma", "uri": with_param("hosts", "hosts=192.168.1.20,")},
+            {"name": "hosts_three_octets", "uri": with_param("hosts", "hosts=1.2.3")},
+            {"name": "hosts_five_octets", "uri": with_param("hosts", "hosts=1.2.3.4.5")},
+            {"name": "empty_v", "uri": with_param("v", "v=")},
+            {"name": "empty_name", "uri": with_param("name", "name=")},
         ],
     }
 

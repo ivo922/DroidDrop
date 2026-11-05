@@ -111,6 +111,12 @@ droiddrop://pair?v=1&name=<server name>&hosts=<ipv4>[,<ipv4>…]&port=<port>&fp=
 - `v` MUST be `1`. `port` is 1–65535. `hosts` is a comma-separated, non-empty list of dotted-quad IPv4 addresses (each octet 0–255, no leading zeros beyond a single `0`).
 - `fp` is the server fingerprint; `secret` is 32 random bytes.
 - **Encoding:** encoders MUST percent-encode every byte of a value outside the unreserved set `A–Z a–z 0–9 - . _ ~` (UTF-8, uppercase hex). **Decoding:** standard percent-decoding; `+` is a literal plus sign, **not** a space.
+- **Strict parsing:** decoders MUST reject a URI unless all of the following hold:
+  1. It starts with exactly `droiddrop://pair?` (lowercase scheme; authority exactly `pair` — no userinfo, no port, no path) and contains no fragment (`#`).
+  2. Every raw character is printable ASCII 0x21–0x7E; anything else must be percent-encoded.
+  3. Each of the six known parameters (`v`, `name`, `hosts`, `port`, `fp`, `secret`) appears exactly once (compared after percent-decoding the key) and contains `=`. Unknown parameters may repeat or lack `=`.
+  4. `port` is ASCII decimal matching `[1-9][0-9]{0,4}` with value 1–65535. `v` is exactly `1`.
+  5. Every percent escape is `%` followed by two hex digits (either case), and the decoded bytes of every key and value are valid UTF-8.
 
 ### 6.2 Pairing window
 
