@@ -2,6 +2,7 @@ import Foundation
 import Network
 
 /// NWConnection carrying DroidDrop frames. Handlers capture `self` strongly; NWConnection releases them once cancelled.
+/// There is no deinit cleanup: callers must `cancel()` or `close()` every started connection.
 public final class FramedConnection: @unchecked Sendable {
     public enum Event {
         case ready
@@ -16,6 +17,9 @@ public final class FramedConnection: @unchecked Sendable {
     private let queue: DispatchQueue
     private var decoder = FrameDecoder()
     private var finished = false
+    private let lock = NSLock()
+    /// Set by `close()`/`cancel()` from any thread; a local close reports `.closed(nil)`.
+    private var locallyClosed = false
 
     public init(connection: NWConnection, queue: DispatchQueue) {
         self.connection = connection
@@ -29,8 +33,7 @@ public final class FramedConnection: @unchecked Sendable {
                 self.onEvent?(.ready)
                 self.receive()
             case .waiting(let error), .failed(let error):
-                self.finish(error)
-                self.connection.cancel()
+                self.fail(error)
             case .cancelled:
                 self.finish(nil)
             default:
@@ -44,47 +47,58 @@ public final class FramedConnection: @unchecked Sendable {
         do {
             send(.control(try MessageCodec.encode(message)))
         } catch {
-            cancel()
+            queue.async { self.fail(error) }
         }
     }
 
+    /// Dropped silently once `close()` or `cancel()` has been called.
     public func send(_ frame: Frame) {
+        guard !isLocallyClosed else { return }
         connection.send(content: FrameEncoder.encode(frame), completion: .contentProcessed { error in
-            if let error {
-                self.finish(error)
-                self.connection.cancel()
-            }
+            if let error { self.fail(error) }
         })
     }
 
-    /// Sends everything queued so far, then closes.
+    /// Sends everything queued so far, then closes. Later calls are no-ops.
     public func close() {
+        guard markLocallyClosed() else { return }
         connection.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in
             self.connection.cancel()
         })
     }
 
     public func cancel() {
+        markLocallyClosed()
         connection.cancel()
+    }
+
+    private var isLocallyClosed: Bool { lock.withLock { locallyClosed } }
+
+    /// Returns false if the connection was already locally closed.
+    @discardableResult
+    private func markLocallyClosed() -> Bool {
+        lock.withLock {
+            defer { locallyClosed = true }
+            return !locallyClosed
+        }
     }
 
     private func receive() {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 256 * 1024) { data, _, isComplete, error in
-            guard !self.finished else { return }
+            guard !self.finished, !self.isLocallyClosed else { return }
             if let data, !data.isEmpty {
                 do {
                     for frame in try self.decoder.append(data) {
+                        guard !self.finished, !self.isLocallyClosed else { return }
                         self.onEvent?(.frame(frame))
                     }
                 } catch {
-                    self.finish(error)
-                    self.connection.cancel()
+                    self.fail(error)
                     return
                 }
             }
             if let error {
-                self.finish(error)
-                self.connection.cancel()
+                self.fail(error)
             } else if isComplete {
                 self.finish(nil)
                 self.connection.cancel()
@@ -94,11 +108,16 @@ public final class FramedConnection: @unchecked Sendable {
         }
     }
 
+    private func fail(_ error: Error) {
+        finish(error)
+        connection.cancel()
+    }
+
     private func finish(_ error: Error?) {
         guard !finished else { return }
         finished = true
         let handler = onEvent
         onEvent = nil
-        handler?(.closed(error))
+        handler?(.closed(isLocallyClosed ? nil : error))
     }
 }

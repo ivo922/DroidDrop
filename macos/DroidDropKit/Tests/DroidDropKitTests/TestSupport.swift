@@ -57,13 +57,18 @@ final class EventRecorder: @unchecked Sendable {
 }
 
 enum TestClient {
-    static func connect(port: UInt16, identity: Identity, pinnedServer: Data) throws -> (FramedConnection, EventRecorder) {
+    /// `react` runs on the connection's queue after each event is recorded.
+    static func connect(port: UInt16, identity: Identity, pinnedServer: Data,
+                        react: ((FramedConnection, FramedConnection.Event) -> Void)? = nil) throws -> (FramedConnection, EventRecorder) {
         let queue = DispatchQueue(label: "test.client.\(UUID().uuidString)")
         let parameters = TLSParameters.make(identity: try identity.secIdentity(), queue: queue) { $0 == pinnedServer }
         let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: parameters)
         let framed = FramedConnection(connection: connection, queue: queue)
         let recorder = EventRecorder()
-        framed.onEvent = recorder.record
+        framed.onEvent = { [weak framed] event in
+            recorder.record(event)
+            if let framed { react?(framed, event) }
+        }
         framed.start()
         return (framed, recorder)
     }
@@ -80,6 +85,7 @@ final class LoopbackServer: @unchecked Sendable {
     private var startContinuation: CheckedContinuation<UInt16, Error>?
 
     var peerFingerprints: [Data] { queue.sync { fingerprints } }
+    var accepted: [FramedConnection] { queue.sync { connections } }
 
     init(identity: Identity, acceptPeer: @escaping (Data) -> Bool) throws {
         listener = try NWListener(using: TLSParameters.make(identity: try identity.secIdentity(), queue: queue, acceptPeer: acceptPeer), on: .any)

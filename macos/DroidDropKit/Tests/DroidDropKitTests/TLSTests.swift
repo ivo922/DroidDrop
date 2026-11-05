@@ -1,6 +1,12 @@
 import Foundation
+import Network
 import Testing
 @testable import DroidDropKit
+
+private func isTLSError(_ error: Error?) -> Bool {
+    if case .tls = error as? NWError { return true }
+    return false
+}
 
 @Suite struct TLSTests {
     let serverIdentity = try! Identity.generate(commonName: "Server")
@@ -16,6 +22,7 @@ import Testing
         #expect(try await server.events.nextMessage() == .ping(id: 1))
         #expect(server.peerFingerprints == [clientIdentity.fingerprint])
         client.cancel()
+        withExtendedLifetime(server) {}
     }
 
     @Test func clientRejectsServerWithWrongFingerprint() async throws {
@@ -24,7 +31,8 @@ import Testing
         let (_, clientEvents) = try TestClient.connect(port: port, identity: clientIdentity, pinnedServer: Data(repeating: 0, count: 32))
 
         guard case .closed(let error) = try await clientEvents.next() else { Issue.record("handshake should fail"); return }
-        #expect(error != nil)
+        #expect(isTLSError(error), "expected TLS error, got \(String(describing: error))")
+        withExtendedLifetime(server) {}
     }
 
     @Test func serverRejectsClientItDoesNotAccept() async throws {
@@ -33,6 +41,59 @@ import Testing
         let (client, clientEvents) = try TestClient.connect(port: port, identity: clientIdentity, pinnedServer: serverIdentity.fingerprint)
         client.send(.ping(id: 1))
 
+        guard case .closed(let serverError) = try await server.events.next() else { Issue.record("server must never become ready"); return }
+        #expect(isTLSError(serverError), "expected TLS error, got \(String(describing: serverError))")
+        #expect(server.peerFingerprints.isEmpty)
         try await clientEvents.expectClosedWithoutFrames()
+        withExtendedLifetime(server) {}
+    }
+
+    @Test func localCancelReportsClosedWithoutError() async throws {
+        let server = try LoopbackServer(identity: serverIdentity) { _ in true }
+        let port = try await server.start()
+        let (client, clientEvents) = try TestClient.connect(port: port, identity: clientIdentity, pinnedServer: serverIdentity.fingerprint)
+
+        guard case .ready = try await clientEvents.next() else { Issue.record("client never became ready"); return }
+        client.cancel()
+        guard case .closed(let error) = try await clientEvents.next() else { Issue.record("expected closed"); return }
+        #expect(error == nil, "local cancel reported \(String(describing: error))")
+        withExtendedLifetime(server) {}
+    }
+
+    @Test func closeFlushesIsIdempotentAndDropsLaterSends() async throws {
+        let server = try LoopbackServer(identity: serverIdentity) { _ in true }
+        let port = try await server.start()
+        let (client, clientEvents) = try TestClient.connect(port: port, identity: clientIdentity, pinnedServer: serverIdentity.fingerprint)
+
+        guard case .ready = try await clientEvents.next() else { Issue.record("client never became ready"); return }
+        client.send(.ping(id: 1))
+        client.close()
+        client.close()
+        client.send(.ping(id: 2))
+
+        guard case .closed(let error) = try await clientEvents.next() else { Issue.record("expected closed"); return }
+        #expect(error == nil, "local close reported \(String(describing: error))")
+        #expect(try await server.events.nextMessage() == .ping(id: 1))
+        try await server.events.expectClosedWithoutFrames()
+        withExtendedLifetime(server) {}
+    }
+
+    @Test func noFramesDeliveredAfterHandlerCancels() async throws {
+        let server = try LoopbackServer(identity: serverIdentity) { _ in true }
+        let port = try await server.start()
+        let (_, clientEvents) = try TestClient.connect(port: port, identity: clientIdentity, pinnedServer: serverIdentity.fingerprint) { framed, event in
+            if case .frame = event { framed.cancel() }
+        }
+
+        guard case .ready = try await server.events.next() else { Issue.record("server never became ready"); return }
+        let first = FrameEncoder.encode(.control(try MessageCodec.encode(.ping(id: 1))))
+        let second = FrameEncoder.encode(.control(try MessageCodec.encode(.ping(id: 2))))
+        server.accepted[0].connection.send(content: first + second, completion: .idempotent)
+
+        guard case .ready = try await clientEvents.next() else { Issue.record("client never became ready"); return }
+        guard case .frame = try await clientEvents.next() else { Issue.record("expected first frame"); return }
+        guard case .closed(let error) = try await clientEvents.next() else { Issue.record("frame delivered after cancel"); return }
+        #expect(error == nil)
+        withExtendedLifetime(server) {}
     }
 }
