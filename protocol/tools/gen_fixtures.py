@@ -114,6 +114,8 @@ def messages():
              "json": {"type": "ping", "id": 1}},
             {"name": "large_finite_double_ok", "raw": "{\"type\":\"ping\",\"id\":1,\"x\":1.7e308}",
              "json": {"type": "ping", "id": 1}},
+            {"name": "pair_result_null_optionals", "raw": "{\"type\":\"pair_result\",\"ok\":false,\"proof\":null,\"reason\":null}",
+             "json": {"type": "pair_result", "ok": False}},
         ],
         "unknown": [
             {"name": "future_type", "json": {"type": "screen_share", "x": 1}, "type": "screen_share"},
@@ -161,10 +163,21 @@ def messages():
             {"name": "number_overflow_in_unknown_member", "raw": "{\"type\":\"ping\",\"id\":1,\"x\":1E400}"},
             {"name": "negative_number_overflow", "raw": "{\"type\":\"ping\",\"id\":1,\"x\":-1e309}"},
             {"name": "long_integer_overflow", "raw": "{\"type\":\"ping\",\"id\":1,\"x\":1" + "0" * 400 + "}"},
+            {"name": "ping_fraction_zero", "raw": "{\"type\":\"ping\",\"id\":1.0}"},
+            {"name": "ping_exponent", "raw": "{\"type\":\"ping\",\"id\":1e3}"},
+            {"name": "ping_above_max", "raw": "{\"type\":\"ping\",\"id\":9007199254740992}"},
+            {"name": "ping_u64_max", "raw": "{\"type\":\"ping\",\"id\":18446744073709551615}"},
+            {"name": "ping_id_bool", "raw": "{\"type\":\"ping\",\"id\":true}"},
+            {"name": "ping_id_null", "raw": "{\"type\":\"ping\",\"id\":null}"},
+            {"name": "clip_text_null", "raw": "{\"type\":\"clip\",\"id\":\"5b2c8f9e-1d3a-4e7b-9c6d-0a1b2c3d4e5f\",\"mime\":\"text/plain\",\"text\":null}"},
+            {"name": "hello_v_float", "raw": "{\"type\":\"hello\",\"v\":1.0,\"name\":\"a\",\"platform\":\"macos\"}"},
+            {"name": "file_result_ok_number", "raw": "{\"type\":\"file_result\",\"transferId\":\"" + tid + "\",\"ok\":1}"},
         ],
         "invalidHex": [
             {"name": "bad_utf8", "hex": "7b2274797065223a2270696e67222c226964223a312c2278223a22ff22 7d".replace(" ", "")},
             {"name": "utf8_bom", "hex": "efbbbf" + b"{\"type\":\"ping\",\"id\":1}".hex()},
+            {"name": "utf8_surrogate", "hex": (b"{\"type\":\"ping\",\"id\":1,\"x\":\"" + b"\xed\xa0\x80" + b"\"}").hex()},
+            {"name": "utf8_overlong", "hex": (b"{\"type\":\"ping\",\"id\":1,\"x\":\"" + b"\xc0\x80" + b"\"}").hex()},
         ],
     }
 
