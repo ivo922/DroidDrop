@@ -112,6 +112,8 @@ def messages():
              "json": {"type": "ping", "id": 1}},
             {"name": "nesting_depth_64", "raw": "{\"type\":\"ping\",\"id\":1,\"x\":" + "[" * 63 + "]" * 63 + "}",
              "json": {"type": "ping", "id": 1}},
+            {"name": "large_finite_double_ok", "raw": "{\"type\":\"ping\",\"id\":1,\"x\":1.7e308}",
+             "json": {"type": "ping", "id": 1}},
         ],
         "unknown": [
             {"name": "future_type", "json": {"type": "screen_share", "x": 1}, "type": "screen_share"},
@@ -156,6 +158,9 @@ def messages():
             {"name": "lone_low_surrogate_in_unknown_member", "raw": "{\"type\":\"ping\",\"id\":1,\"x\":\"\\udc00\"}"},
             {"name": "trailing_garbage", "raw": "{\"type\":\"ping\",\"id\":1}x"},
             {"name": "nesting_depth_65", "raw": "{\"type\":\"ping\",\"id\":1,\"x\":" + "[" * 64 + "]" * 64 + "}"},
+            {"name": "number_overflow_in_unknown_member", "raw": "{\"type\":\"ping\",\"id\":1,\"x\":1E400}"},
+            {"name": "negative_number_overflow", "raw": "{\"type\":\"ping\",\"id\":1,\"x\":-1e309}"},
+            {"name": "long_integer_overflow", "raw": "{\"type\":\"ping\",\"id\":1,\"x\":1" + "0" * 400 + "}"},
         ],
         "invalidHex": [
             {"name": "bad_utf8", "hex": "7b2274797065223a2270696e67222c226964223a312c2278223a22ff22 7d".replace(" ", "")},

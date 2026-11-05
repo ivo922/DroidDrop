@@ -53,7 +53,7 @@ A control payload is a JSON object with a string member `type`. Rules:
 - A known type with a missing or invalid member, a payload that is not valid UTF-8 JSON, a JSON value that is not an object, or a missing/non-string `type` is a **protocol error**: the receiver MUST close the connection.
 - Encoders MUST omit absent optional members (never emit `null`). Decoders treat an optional member whose value is `null` as absent.
 - Integers are JSON numbers without fraction or exponent, range `0 … 2^53-1`.
-- "Valid JSON" means strict RFC 8259 with no extensions, plus: no byte-order mark, no duplicate member names in any object (compared by code points after unescaping, without Unicode normalization), no unpaired surrogate escapes (`\ud800`), no number token `-0` without fraction or exponent anywhere in the payload, and nesting depth at most 64 (each object or array counts one level, the root object included). Anything else (trailing commas, comments, unquoted literals) is a protocol error.
+- "Valid JSON" means strict RFC 8259 with no extensions, plus: no byte-order mark, no duplicate member names in any object (compared by code points after unescaping, without Unicode normalization), no unpaired surrogate escapes (`\ud800`), no number token `-0` without fraction or exponent anywhere in the payload, every number token, parsed as IEEE-754 binary64, finite (e.g. `1E400` and `-1e309` are invalid), and nesting depth at most 64 (each object or array counts one level, the root object included). Anything else (trailing commas, comments, unquoted literals) is a protocol error.
 
 Common member formats:
 
@@ -78,7 +78,7 @@ Common member formats:
 
 | type | members | notes |
 |---|---|---|
-| `clip` | `id`: uuid, `mime`: nonempty, `text`: string | v1 senders only use `mime = "text/plain"`. Receivers MUST ignore clips with any other mime. `text` is at most 262 144 UTF-8 bytes. |
+| `clip` | `id`: uuid, `mime`: nonempty, `text`: string | v1 senders only use `mime = "text/plain"`. Receivers MUST ignore clips with any other mime. `text` is at most 262 144 UTF-8 bytes; this is not a protocol error: senders MUST NOT send larger clips; receivers MUST ignore (drop) larger clips without closing the connection. |
 
 ### 4.3 File transfer
 
@@ -109,7 +109,7 @@ droiddrop://pair?v=1&name=<server name>&hosts=<ipv4>[,<ipv4>…]&port=<port>&fp=
 ```
 
 - Scheme `droiddrop`, host `pair`. Parameter order is free; unknown parameters are ignored. All listed parameters are required.
-- `v` MUST be `1`. `port` is 1–65535. `hosts` is a comma-separated, non-empty list of dotted-quad IPv4 addresses (each octet 0–255, no leading zeros beyond a single `0`).
+- `v` MUST be `1`. `name` is non-empty. `port` is 1–65535. `hosts` is a comma-separated, non-empty list of dotted-quad IPv4 addresses (each octet 0–255, no leading zeros beyond a single `0`).
 - `fp` is the server fingerprint; `secret` is 32 random bytes.
 - **Encoding:** encoders MUST percent-encode every byte of a value outside the unreserved set `A–Z a–z 0–9 - . _ ~` (UTF-8, uppercase hex). **Decoding:** standard percent-decoding; `+` is a literal plus sign, **not** a space.
 - **Strict parsing:** decoders MUST reject a URI unless all of the following hold:

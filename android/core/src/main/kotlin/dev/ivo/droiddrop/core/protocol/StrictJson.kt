@@ -4,7 +4,8 @@ import java.io.ByteArrayOutputStream
 
 /**
  * Strict RFC 8259 grammar check (SPEC §4): no BOM, no duplicate member names in any object
- * (compared after unescaping), no unpaired surrogate escapes, no `-0`. Input must already be valid UTF-8.
+ * (compared after unescaping), no unpaired surrogate escapes, no `-0`, every number finite as binary64,
+ * nesting depth at most [MAX_DEPTH]. Input must already be valid UTF-8.
  */
 internal object StrictJson {
     const val MAX_DEPTH = 64
@@ -166,6 +167,9 @@ internal object StrictJson {
                 isInteger = false
             }
             if (isInteger && first == '0'.code && bytes[start] == '-'.code.toByte()) throw error("-0 is not an integer")
+            if (!String(bytes, start, index - start, Charsets.US_ASCII).toDouble().isFinite()) {
+                throw error("number overflows binary64")
+            }
         }
 
         private fun requireDigits() {

@@ -1,5 +1,6 @@
 /// Strict RFC 8259 grammar check (SPEC §4): no BOM, no duplicate member names in any object
-/// (compared after unescaping), no unpaired surrogate escapes, no `-0`. Input must already be valid UTF-8.
+/// (compared after unescaping), no unpaired surrogate escapes, no `-0`, every number finite as binary64,
+/// nesting depth at most `maxDepth`. Input must already be valid UTF-8.
 enum StrictJSON {
     static let maxDepth = 64
 
@@ -155,7 +156,9 @@ enum StrictJSON {
                 try requireDigits()
                 isInteger = false
             }
-            if isInteger && bytes[start..<index].elementsEqual("-0".utf8) { throw error("-0 is not an integer") }
+            let token = bytes[start..<index]
+            if isInteger && token.elementsEqual("-0".utf8) { throw error("-0 is not an integer") }
+            guard Double(String(decoding: token, as: UTF8.self))?.isFinite == true else { throw error("number overflows binary64") }
         }
 
         mutating func requireDigits() throws {
