@@ -96,7 +96,7 @@ Common member formats:
 1. Client opens TCP + TLS 1.3. The server's TLS verify step accepts the client certificate if its fingerprint is paired **or** a pairing window (§6) is open; otherwise it fails the handshake. The client accepts the server certificate only if its fingerprint equals the pinned/expected one.
 2. Each side immediately sends `hello`. A side that receives `hello` with `v ≠ 1` MUST close. Any message other than `hello` before `hello` is a protocol error.
 3. **Unpaired client** (fingerprint not in the server's paired set): the only message the client may send is `pair_request`; anything else is a protocol error. See §6.
-4. **Paired session:** all other messages are allowed. `hello` or `pair_request` received again is a protocol error.
+4. **Paired session:** a client that believes it is paired sends `ping` immediately after its `hello` and treats the session as established only when the matching `pong` arrives; a server that does not know the client closes the connection instead (rule 3). All other messages are allowed. `hello` or `pair_request` received again is a protocol error.
 5. **Keepalive:** the client sends `ping` (incrementing `id`) after 30 s without sending anything; the server answers `pong`. Each side closes the connection if nothing was received for 90 s.
 6. The server keeps at most one session per client fingerprint; a new session for the same fingerprint replaces (closes) the old one.
 
