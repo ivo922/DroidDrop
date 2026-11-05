@@ -1,0 +1,44 @@
+name: DroidDrop
+options:
+  bundleIdPrefix: dev.ivo
+  deploymentTarget:
+    macOS: "26.0"
+packages:
+  DroidDropKit:
+    path: DroidDropKit
+targets:
+  DroidDrop:
+    type: application
+    platform: macOS
+    sources:
+      - path: DroidDrop
+        excludes:
+          - Info.plist
+    dependencies:
+      - package: DroidDropKit
+        product: DroidDropKit
+    info:
+      path: DroidDrop/Info.plist
+      properties:
+        CFBundleDisplayName: DroidDrop
+        LSUIElement: true
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSLocalNetworkUsageDescription: DroidDrop connects to your paired Android phone on the local network.
+        NSBonjourServices: [_droiddrop._tcp]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.ivo.DroidDrop
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        ENABLE_HARDENED_RUNTIME: NO
+schemes:
+  DroidDrop:
+    build:
+      targets:
+        DroidDrop: all
+    run:
+      config: Debug

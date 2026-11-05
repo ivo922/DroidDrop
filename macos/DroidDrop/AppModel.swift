@@ -1,0 +1,170 @@
+import Combine
+import DroidDropKit
+import Foundation
+
+/// Menu-bar state for the local server.
+///
+/// `isListening` follows `start`'s completion only. A `.waiting` listener fails that
+/// completion (after the server's port fallback). The server does not report a listener
+/// failure once `start` has succeeded, so the menu cannot show one.
+@MainActor
+final class AppModel: ObservableObject {
+    @Published private(set) var pairedPeers: [Peer] = []
+    @Published private(set) var connectedPeers: [Peer] = []
+    @Published private(set) var pairURI: PairURI?
+    @Published private(set) var pairingExpiresAt: Date?
+    @Published private(set) var justPaired: Peer?
+    /// Listener or peer-store failure. An unpair failure is `unpairError` so it does not hide this.
+    @Published private(set) var serverError: String?
+    @Published private(set) var unpairError: String?
+    @Published private(set) var isListening = false
+    @Published private(set) var noNetwork = false
+
+    let macCode: String
+    private let server: DroidDropServer?
+    private var wantsPairing = false
+
+    init() throws {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: "DroidDrop")
+        let identity = try IdentityStore(directory: support).loadOrCreate(commonName: "DroidDrop Mac")
+        macCode = Pairing.displayCode(fingerprint: identity.fingerprint)
+
+        let peers: PeerStore
+        do {
+            peers = try PeerStore(url: support.appending(path: "peers.json"))
+        } catch {
+            server = nil
+            serverError = Self.describe(error)
+            return
+        }
+
+        let server = DroidDropServer(
+            identity: identity,
+            peers: peers,
+            configuration: .init(name: Self.serverName())
+        )
+        self.server = server
+        server.onConnectedPeersChanged = { [weak self] peers in
+            Task { @MainActor [weak self] in
+                self?.connectedPeers = peers
+            }
+        }
+        server.onPeerPaired = { [weak self] peer in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.justPaired = peer
+                self.pairURI = nil
+                self.pairingExpiresAt = nil
+                self.noNetwork = false
+                self.refreshPeers()
+            }
+        }
+        server.start { [weak self] result in
+            let failure: String?
+            if case .failure(let error) = result {
+                failure = Self.describe(error)
+            } else {
+                failure = nil
+            }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if let failure {
+                    self.isListening = false
+                    self.serverError = failure
+                } else {
+                    self.isListening = true
+                    self.serverError = nil
+                }
+                self.refreshPeers()
+                if self.wantsPairing { self.openPairingIfPossible() }
+            }
+        }
+    }
+
+    /// Computer name when it is non-blank; otherwise "Mac" (SPEC §6.1 requires a non-empty name).
+    static func serverName(localizedName: String? = Host.current().localizedName) -> String {
+        let trimmed = localizedName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "Mac" : trimmed
+    }
+
+    var statusLine: String {
+        if !isListening {
+            return serverError == nil ? "Starting…" : "Not listening"
+        }
+        if connectedPeers.isEmpty { return "No phone connected" }
+        return "Connected: " + connectedPeers.map(\.name).joined(separator: ", ")
+    }
+
+    func startPairing() {
+        wantsPairing = true
+        justPaired = nil
+        openPairingIfPossible()
+    }
+
+    func cancelPairing() {
+        wantsPairing = false
+        noNetwork = false
+        pairURI = nil
+        pairingExpiresAt = nil
+        server?.closePairingWindow()
+    }
+
+    /// Unpairs on the main actor. Returns the message to show when saving the peer list fails.
+    @discardableResult
+    func unpair(_ fingerprint: Data) -> String? {
+        guard let server else {
+            return serverError ?? "DroidDrop is not running"
+        }
+        do {
+            try server.unpair(fingerprint: fingerprint)
+            unpairError = nil
+            refreshPeers()
+            return nil
+        } catch {
+            let message = Self.describe(error)
+            unpairError = message
+            return message
+        }
+    }
+
+    private func openPairingIfPossible() {
+        guard wantsPairing, let server, isListening else {
+            if !isListening {
+                noNetwork = false
+                pairURI = nil
+                pairingExpiresAt = nil
+            }
+            return
+        }
+        let hosts = LocalAddresses.ipv4().filter(PairURI.isIPv4)
+        guard !hosts.isEmpty else {
+            server.closePairingWindow()
+            noNetwork = true
+            pairURI = nil
+            pairingExpiresAt = nil
+            serverError = nil
+            return
+        }
+        noNetwork = false
+        let uri = server.openPairingWindow(hosts: hosts)
+        guard PairURI(string: uri.string) != nil else {
+            server.closePairingWindow()
+            pairURI = nil
+            pairingExpiresAt = nil
+            serverError = "Could not build a pairing link"
+            return
+        }
+        serverError = nil
+        pairURI = uri
+        pairingExpiresAt = Date().addingTimeInterval(PairingWindow.lifetime)
+    }
+
+    private func refreshPeers() {
+        pairedPeers = server?.pairedPeers() ?? []
+    }
+
+    private static func describe(_ error: Error) -> String {
+        String(describing: error).replacingOccurrences(of: "\n", with: " ")
+    }
+}
