@@ -92,6 +92,19 @@
         "fingerprint": "vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8",
         "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
       }
+    },
+    {
+      "name": "combining_mark_key_is_unknown",
+      "uri": "droiddrop://pair?v=1&name=Mac&hosts=192.168.1.20&port=47321&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&fp%CC%81=x",
+      "expected": {
+        "name": "Mac",
+        "hosts": [
+          "192.168.1.20"
+        ],
+        "port": 47321,
+        "fingerprint": "vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8",
+        "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+      }
     }
   ],
   "invalid": [
@@ -226,6 +239,38 @@
     {
       "name": "empty_name",
       "uri": "droiddrop://pair?v=1&name=&hosts=192.168.1.20&port=47321&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    },
+    {
+      "name": "unknown_value_invalid_utf8",
+      "uri": "droiddrop://pair?v=1&name=Mac&hosts=192.168.1.20&port=47321&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&extra=%FF"
+    },
+    {
+      "name": "unknown_key_malformed_escape",
+      "uri": "droiddrop://pair?v=1&name=Mac&hosts=192.168.1.20&port=47321&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&%zz=1"
+    },
+    {
+      "name": "name_cesu_surrogate",
+      "uri": "droiddrop://pair?v=1&name=%ED%A0%80&hosts=192.168.1.20&port=47321&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    },
+    {
+      "name": "name_overlong_nul",
+      "uri": "droiddrop://pair?v=1&name=%C0%80&hosts=192.168.1.20&port=47321&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    },
+    {
+      "name": "name_above_max_code_point",
+      "uri": "droiddrop://pair?v=1&name=%F4%90%80%80&hosts=192.168.1.20&port=47321&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    },
+    {
+      "name": "duplicate_v_encoded_key",
+      "uri": "droiddrop://pair?v=1&name=Mac&hosts=192.168.1.20&port=47321&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&%76=1"
+    },
+    {
+      "name": "fp_noncanonical_tail_bits",
+      "uri": "droiddrop://pair?v=1&name=Mac&hosts=192.168.1.20&port=47321&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v9&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    },
+    {
+      "name": "bom_prefixed_known_key",
+      "uri": "droiddrop://pair?%EF%BB%BFv=1&name=Mac&hosts=192.168.1.20&port=47321&fp=vfgFdfREwYioGfx3pvZxktBUzEZZ6O_Lr9JYjm1o7v8&secret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
     }
   ]
 }

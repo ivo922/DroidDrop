@@ -16,6 +16,9 @@ MAX_CHUNK_DATA = 1_048_576
 MAX_LENGTH = 1 + 16 + 8 + MAX_CHUNK_DATA
 
 
+B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+
 def b64url(b: bytes) -> str:
     return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
 
@@ -218,6 +221,8 @@ def pair_uri():
              "expected": basic},
             {"name": "empty_segments_ignored", "uri": f"droiddrop://pair?&{query.replace('&', '&&', 1)}&",
              "expected": basic},
+            {"name": "combining_mark_key_is_unknown", "uri": f"droiddrop://pair?{query}&fp%CC%81=x",
+             "expected": basic},
         ],
         "invalid": [
             {"name": "wrong_scheme", "uri": f"https://pair?v=1&name=Mac&hosts=192.168.1.20&port=47321&{base}"},
@@ -253,6 +258,14 @@ def pair_uri():
             {"name": "hosts_five_octets", "uri": with_param("hosts", "hosts=1.2.3.4.5")},
             {"name": "empty_v", "uri": with_param("v", "v=")},
             {"name": "empty_name", "uri": with_param("name", "name=")},
+            {"name": "unknown_value_invalid_utf8", "uri": f"droiddrop://pair?{query}&extra=%FF"},
+            {"name": "unknown_key_malformed_escape", "uri": f"droiddrop://pair?{query}&%zz=1"},
+            {"name": "name_cesu_surrogate", "uri": with_param("name", "name=%ED%A0%80")},
+            {"name": "name_overlong_nul", "uri": with_param("name", "name=%C0%80")},
+            {"name": "name_above_max_code_point", "uri": with_param("name", "name=%F4%90%80%80")},
+            {"name": "duplicate_v_encoded_key", "uri": f"droiddrop://pair?{query}&%76=1"},
+            {"name": "fp_noncanonical_tail_bits", "uri": with_param("fp", f"fp={fp[:-1]}{B64_ALPHABET[B64_ALPHABET.index(fp[-1]) ^ 1]}")},
+            {"name": "bom_prefixed_known_key", "uri": with_param("v", "%EF%BB%BFv=1")},
         ],
     }
 
