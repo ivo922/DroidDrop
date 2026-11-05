@@ -62,6 +62,22 @@ import Testing
         #expect(server.pairedPeers().isEmpty)
     }
 
+    @Test func rejectsPairRequestAfterWindowClosesBeforeClosing() async throws {
+        let (server, port) = try await makeServer()
+        defer { server.stop() }
+        let uri = server.openPairingWindow(hosts: ["127.0.0.1"])
+        let (connection, events) = try TestClient.connect(port: port, identity: phone, pinnedServer: uri.fingerprint)
+        _ = try await events.nextMessage()
+        server.closePairingWindow()
+        connection.send(.hello(v: 1, name: "Pixel", platform: .android))
+        let proof = Pairing.clientProof(secret: uri.secret, serverFingerprint: uri.fingerprint, clientFingerprint: phone.fingerprint)
+        connection.send(.pairRequest(proof: Base64URL.encode(proof)))
+
+        #expect(try await events.nextMessage() == .pairResult(ok: false, proof: nil, reason: "window_closed"))
+        try await events.expectClosed()
+        #expect(server.pairedPeers().isEmpty)
+    }
+
     @Test func refusesUnknownClientWhenNoWindowIsOpen() async throws {
         let (server, port) = try await makeServer()
         defer { server.stop() }

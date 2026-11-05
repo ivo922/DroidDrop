@@ -3,6 +3,10 @@ import Network
 import Testing
 @testable import DroidDropKit
 
+private final class ConnectionBag: @unchecked Sendable {
+    var connections: [NWConnection] = []
+}
+
 private func isTLSError(_ error: Error?) -> Bool {
     if case .tls = error as? NWError { return true }
     return false
@@ -76,6 +80,33 @@ private func isTLSError(_ error: Error?) -> Bool {
         #expect(try await server.events.nextMessage() == .ping(id: 1))
         try await server.events.expectClosedWithoutFrames()
         withExtendedLifetime(server) {}
+    }
+
+    @Test func closeCancelsAfterLingerWhenPeerNeverCloses() async throws {
+        let queue = DispatchQueue(label: "test.silent.server")
+        let listener = try NWListener(using: TLSParameters.make(identity: try serverIdentity.secIdentity(), queue: queue) { _ in true }, on: .any)
+        let accepted = ConnectionBag()
+        listener.newConnectionHandler = { connection in
+            accepted.connections.append(connection)
+            connection.start(queue: queue)
+        }
+        let port = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UInt16, Error>) in
+            listener.stateUpdateHandler = { state in
+                if case .ready = state { continuation.resume(returning: listener.port!.rawValue) }
+            }
+            listener.start(queue: queue)
+        }
+        defer {
+            listener.cancel()
+            queue.sync { accepted.connections.forEach { $0.cancel() } }
+        }
+        let (client, clientEvents) = try TestClient.connect(port: port, identity: clientIdentity, pinnedServer: serverIdentity.fingerprint,
+                                                            lingerTimeout: 0.2)
+
+        guard case .ready = try await clientEvents.next() else { Issue.record("client never became ready"); return }
+        client.close()
+        guard case .closed(let error) = try await clientEvents.next(timeout: 2) else { Issue.record("expected closed"); return }
+        #expect(error == nil)
     }
 
     @Test func noFramesDeliveredAfterHandlerCancels() async throws {

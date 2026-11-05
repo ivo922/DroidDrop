@@ -59,11 +59,12 @@ final class EventRecorder: @unchecked Sendable {
 enum TestClient {
     /// `react` runs on the connection's queue after each event is recorded.
     static func connect(port: UInt16, identity: Identity, pinnedServer: Data,
+                        lingerTimeout: TimeInterval = FramedConnection.defaultLingerTimeout,
                         react: ((FramedConnection, FramedConnection.Event) -> Void)? = nil) throws -> (FramedConnection, EventRecorder) {
         let queue = DispatchQueue(label: "test.client.\(UUID().uuidString)")
         let parameters = TLSParameters.make(identity: try identity.secIdentity(), queue: queue) { $0 == pinnedServer }
         let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: parameters)
-        let framed = FramedConnection(connection: connection, queue: queue)
+        let framed = FramedConnection(connection: connection, queue: queue, lingerTimeout: lingerTimeout)
         let recorder = EventRecorder()
         framed.onEvent = { [weak framed] event in
             recorder.record(event)
