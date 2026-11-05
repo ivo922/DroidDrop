@@ -7,9 +7,17 @@ let package = Package(
     products: [
         .library(name: "DroidDropKit", targets: ["DroidDropKit"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/apple/swift-certificates.git", from: "1.21.0"),
+        .package(url: "https://github.com/apple/swift-asn1.git", from: "1.0.0"),
+    ],
     targets: [
         .target(
             name: "DroidDropKit",
+            dependencies: [
+                .product(name: "X509", package: "swift-certificates"),
+                .product(name: "SwiftASN1", package: "swift-asn1"),
+            ],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(
