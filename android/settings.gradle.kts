@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "DroidDrop"
-include(":core", ":devcli")
+include(":core", ":devcli", ":app")
