@@ -28,8 +28,8 @@ public enum Message: Equatable, Sendable {
 
 public enum MessageCodec {
     public static func decode(_ data: Data) throws -> Message {
-        // A raw NUL is never valid JSON, and JSONSerialization would otherwise sniff UTF-16/32 input.
-        guard String(data: data, encoding: .utf8) != nil, !data.contains(0) else { throw ProtocolError("payload is not UTF-8") }
+        guard String(data: data, encoding: .utf8) != nil else { throw ProtocolError("payload is not UTF-8") }
+        try StrictJSON.validate(Array(data))
         let json: Any
         do {
             json = try JSONSerialization.jsonObject(with: data)

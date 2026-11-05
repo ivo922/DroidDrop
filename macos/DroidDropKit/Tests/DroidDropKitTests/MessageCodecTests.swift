@@ -30,16 +30,33 @@ import Testing
     }
 
     @Test func invalidMessagesAreRejected() {
-        for entry in Fixtures.list(fixture, "invalid") {
-            #expect(throws: ProtocolError.self, "\(entry["name"]!)") {
-                _ = try MessageCodec.decode(Data((entry["raw"] as! String).utf8))
+        let payloads = Fixtures.list(fixture, "invalid").map { ($0["name"] as! String, Data(($0["raw"] as! String).utf8)) }
+            + Fixtures.list(fixture, "invalidHex").map { ($0["name"] as! String, Data(hex: $0["hex"] as! String)) }
+        let accepted = payloads.filter { (_, data) in
+            do {
+                _ = try MessageCodec.decode(data)
+                return true
+            } catch {
+                return !(error is ProtocolError)
             }
         }
-        for entry in Fixtures.list(fixture, "invalidHex") {
-            #expect(throws: ProtocolError.self, "\(entry["name"]!)") {
-                _ = try MessageCodec.decode(Data(hex: entry["hex"] as! String))
-            }
+        #expect(accepted.map(\.0) == [])
+    }
+
+    @Test func rawEncodingsDecodeLikeCanonicalJSON() throws {
+        for entry in Fixtures.list(fixture, "validRaw") {
+            let canonical = try MessageCodec.decode(JSONSerialization.data(withJSONObject: entry["json"]!))
+            #expect(try MessageCodec.decode(Data((entry["raw"] as! String).utf8)) == canonical, "\(entry["name"]!)")
         }
+    }
+
+    @Test func nestingDepthIsBounded() throws {
+        func ping(nesting depth: Int) -> Data {
+            Data((#"{"type":"ping","id":1,"x":"# + String(repeating: "[", count: depth)
+                + String(repeating: "]", count: depth) + "}").utf8)
+        }
+        #expect(try MessageCodec.decode(ping(nesting: 32)) == .ping(id: 1))
+        #expect(throws: ProtocolError.self) { _ = try MessageCodec.decode(ping(nesting: 100_000)) }
     }
 
     @Test(arguments: [
