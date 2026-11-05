@@ -7,6 +7,7 @@ import X509
 public enum IdentityError: Error {
     case invalidCertificate
     case keyMismatch
+    case incompleteIdentity
 }
 
 public struct Identity: Sendable {
@@ -64,18 +65,63 @@ public struct IdentityStore {
     public func loadOrCreate(commonName: String) throws -> Identity {
         let keyURL = directory.appending(path: "identity.key")
         let certificateURL = directory.appending(path: "identity.der")
-        if let keyData = try? Data(contentsOf: keyURL), let certificate = try? Data(contentsOf: certificateURL) {
-            return Identity(certificateDER: certificate, privateKey: try P256.Signing.PrivateKey(rawRepresentation: keyData))
-        }
         let fileManager = FileManager.default
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        let identity = try Identity.generate(commonName: commonName)
-        try? fileManager.removeItem(at: keyURL)
-        guard fileManager.createFile(atPath: keyURL.path, contents: identity.privateKey.rawRepresentation,
-                                     attributes: [.posixPermissions: 0o600]) else {
-            throw CocoaError(.fileWriteUnknown)
+        let keyExists = fileManager.fileExists(atPath: keyURL.path)
+        let certificateExists = fileManager.fileExists(atPath: certificateURL.path)
+
+        if keyExists && certificateExists {
+            return try load(keyURL: keyURL, certificateURL: certificateURL)
         }
+        guard !keyExists && !certificateExists else { throw IdentityError.incompleteIdentity }
+
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true,
+                                        attributes: [.posixPermissions: 0o700])
+        let identity = try Identity.generate(commonName: commonName)
+        try writePrivately(identity.privateKey.rawRepresentation, to: keyURL)
         try identity.certificateDER.write(to: certificateURL, options: .atomic)
         return identity
+    }
+
+    private func load(keyURL: URL, certificateURL: URL) throws -> Identity {
+        let privateKey = try P256.Signing.PrivateKey(rawRepresentation: Data(contentsOf: keyURL))
+        let certificateDER = try Data(contentsOf: certificateURL)
+        guard let certificate = try? Certificate(derEncoded: Array(certificateDER)) else {
+            throw IdentityError.invalidCertificate
+        }
+        guard certificate.publicKey == Certificate.PublicKey(privateKey.publicKey) else {
+            throw IdentityError.keyMismatch
+        }
+        return Identity(certificateDER: certificateDER, privateKey: privateKey)
+    }
+
+    /// The key must never exist on disk with permissions wider than 0600, even briefly.
+    private func writePrivately(_ data: Data, to url: URL) throws {
+        let temporaryPath = directory.appending(path: ".identity.key.\(UUID().uuidString)").path
+        let descriptor = open(temporaryPath, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        guard descriptor >= 0 else { throw posixError() }
+        var succeeded = false
+        defer { if !succeeded { unlink(temporaryPath) } }
+
+        let writeResult: Int32 = data.withUnsafeBytes { buffer in
+            var offset = 0
+            while offset < buffer.count {
+                let written = write(descriptor, buffer.baseAddress! + offset, buffer.count - offset)
+                if written < 0 {
+                    if errno == EINTR { continue }
+                    return errno
+                }
+                offset += written
+            }
+            return fsync(descriptor) == 0 ? 0 : errno
+        }
+        let closeResult = close(descriptor) == 0 ? 0 : errno
+        if writeResult != 0 { throw posixError(writeResult) }
+        if closeResult != 0 { throw posixError(closeResult) }
+        guard rename(temporaryPath, url.path) == 0 else { throw posixError() }
+        succeeded = true
+    }
+
+    private func posixError(_ code: Int32 = errno) -> POSIXError {
+        POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
     }
 }
