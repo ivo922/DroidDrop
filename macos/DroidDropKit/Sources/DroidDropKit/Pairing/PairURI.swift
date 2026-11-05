@@ -118,7 +118,7 @@ public struct PairURI: Equatable, Sendable {
             && utf8.allSatisfy { (UInt8(ascii: "0")...UInt8(ascii: "9")).contains($0) }
     }
 
-    static func isIPv4(_ string: String) -> Bool {
+    public static func isIPv4(_ string: String) -> Bool {
         let parts = string.utf8.split(separator: UInt8(ascii: "."), omittingEmptySubsequences: false)
         return parts.count == 4 && parts.allSatisfy { part in
             guard (1...3).contains(part.count),

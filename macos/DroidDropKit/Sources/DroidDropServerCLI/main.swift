@@ -14,13 +14,13 @@ func fail(_ error: Any) -> Never {
 }
 
 func usage() -> Never {
-    FileHandle.standardError.write(Data("usage: droiddrop-server [--port N] [--state DIR] [--host IP] [--advertise]\n".utf8))
+    FileHandle.standardError.write(Data("usage: droiddrop-server [--port N] [--state DIR] [--host IP[,IP...]] [--advertise]\n".utf8))
     exit(2)
 }
 
 var port: UInt16 = 47321
 var stateDirectory = FileManager.default.temporaryDirectory.appending(path: "droiddrop-server")
-var host = "127.0.0.1"
+var hosts = ["127.0.0.1"]
 var advertise = false
 
 var arguments = CommandLine.arguments.dropFirst()
@@ -33,8 +33,10 @@ while let argument = arguments.popFirst() {
         guard let value = arguments.popFirst(), !value.isEmpty else { usage() }
         stateDirectory = URL(fileURLWithPath: value)
     case "--host":
-        guard let value = arguments.popFirst(), !value.isEmpty else { usage() }
-        host = value
+        guard let value = arguments.popFirst() else { usage() }
+        let list = value.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+        guard list.allSatisfy(PairURI.isIPv4) else { usage() }
+        hosts = list
     case "--advertise":
         advertise = true
     default:
@@ -68,7 +70,7 @@ var listening = false
 
 func printPairURI() {
     guard listening else { return emit("ERROR not listening yet") }
-    emit("PAIR_URI \(server.openPairingWindow(hosts: [host]).string)")
+    emit("PAIR_URI \(server.openPairingWindow(hosts: hosts).string)")
 }
 
 server.start { result in
