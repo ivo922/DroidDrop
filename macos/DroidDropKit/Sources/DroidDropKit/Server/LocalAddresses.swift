@@ -1,7 +1,8 @@
 import Darwin
 
 public enum LocalAddresses {
-    /// IPv4 addresses of interfaces that are up, excluding loopback and link-local. May be empty.
+    /// IPv4 addresses of interfaces that are up and running, excluding loopback, point-to-point (VPN) and
+    /// link-local. May be empty.
     public static func ipv4() -> [String] {
         var head: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&head) == 0, let first = head else { return [] }
@@ -13,7 +14,8 @@ public enum LocalAddresses {
             let flags = Int32(entry.ifa_flags)
             guard let address = entry.ifa_addr,
                   address.pointee.sa_family == UInt8(AF_INET),
-                  flags & IFF_UP != 0, flags & IFF_LOOPBACK == 0 else { continue }
+                  flags & IFF_UP != 0, flags & IFF_RUNNING != 0,
+                  flags & (IFF_LOOPBACK | IFF_POINTOPOINT) == 0 else { continue }
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             guard getnameinfo(address, socklen_t(address.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else {
                 continue

@@ -9,11 +9,14 @@ public final class DroidDropServer: @unchecked Sendable {
         public var name: String
         public var port: UInt16
         public var advertise: Bool
+        /// Closes a connection after this long without receiving anything (SPEC §5 rule 5).
+        public var idleTimeout: TimeInterval
 
-        public init(name: String, port: UInt16 = 47321, advertise: Bool = true) {
+        public init(name: String, port: UInt16 = 47321, advertise: Bool = true, idleTimeout: TimeInterval = DroidDropServer.idleTimeout) {
             self.name = name
             self.port = port
             self.advertise = advertise
+            self.idleTimeout = idleTimeout
         }
     }
 
@@ -38,7 +41,7 @@ public final class DroidDropServer: @unchecked Sendable {
         let framed: FramedConnection
         let fingerprint: Data
         var machine: ServerSession
-        var lastReceived = Date()
+        var lastReceived = ContinuousClock.now
         var watchdog: DispatchSourceTimer?
 
         init(framed: FramedConnection, fingerprint: Data, machine: ServerSession) {
@@ -164,11 +167,12 @@ public final class DroidDropServer: @unchecked Sendable {
         return queue.sync { currentConnectedPeers() }
     }
 
-    public func unpair(fingerprint: Data) {
-        queue.async { [weak self] in
-            guard let self else { return }
-            try? self.peers.remove(fingerprint)
-            self.sessions[fingerprint]?.framed.cancel()
+    /// Throws if the peer list cannot be saved; the peer then stays paired and connected.
+    public func unpair(fingerprint: Data) throws {
+        dispatchPrecondition(condition: .notOnQueue(queue))
+        try queue.sync {
+            try peers.remove(fingerprint)
+            sessions[fingerprint]?.framed.cancel()
         }
     }
 
@@ -205,14 +209,14 @@ public final class DroidDropServer: @unchecked Sendable {
             }
         }
         connections[id] = framed
-        queue.asyncAfter(deadline: .now() + Self.idleTimeout) { [weak framed] in
+        queue.asyncAfter(deadline: .now() + configuration.idleTimeout) { [weak framed] in
             if session == nil { framed?.cancel() }
         }
         framed.start()
     }
 
     private func handle(_ frame: Frame, in session: Session) {
-        session.lastReceived = Date()
+        session.lastReceived = ContinuousClock.now
         guard case .control(let data) = frame else { return }
         let message: Message
         do {
@@ -242,6 +246,10 @@ public final class DroidDropServer: @unchecked Sendable {
             }
         }
         if session.machine.isPaired, sessions[session.fingerprint] !== session {
+            guard peers.contains(session.fingerprint) else {
+                session.framed.close()
+                return
+            }
             register(session)
         }
     }
@@ -263,11 +271,13 @@ public final class DroidDropServer: @unchecked Sendable {
     }
 
     private func startWatchdog(for session: Session) {
+        let timeout = Duration.seconds(configuration.idleTimeout)
+        let interval = min(10, configuration.idleTimeout / 2)
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + 10, repeating: 10)
+        timer.schedule(deadline: .now() + interval, repeating: interval)
         timer.setEventHandler { [weak session] in
             guard let session else { return }
-            if Date().timeIntervalSince(session.lastReceived) > Self.idleTimeout {
+            if ContinuousClock.now - session.lastReceived > timeout {
                 session.framed.cancel()
             }
         }

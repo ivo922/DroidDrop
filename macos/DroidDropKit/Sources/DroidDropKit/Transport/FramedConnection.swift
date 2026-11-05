@@ -66,12 +66,22 @@ public final class FramedConnection: @unchecked Sendable {
     /// Sends everything queued so far plus `final`, then marks the stream complete. Inbound data is drained
     /// (not delivered) until the peer's EOF or `lingerTimeout`, then the connection is cancelled; cancelling
     /// earlier can reset the socket and lose the last frames. Network's TLS does not forward the half-close,
-    /// so a peer that never closes on its own costs the full linger. Later calls are no-ops.
+    /// so a peer that never closes on its own costs the full linger. If a `final` message cannot be encoded,
+    /// nothing more is sent, the connection is cancelled and `.closed` carries the encoding error.
+    /// Later calls are no-ops.
     public func close(final messages: [Message] = []) {
         guard markLocallyClosed() else { return }
-        for message in messages {
-            if let data = try? MessageCodec.encode(message) { write(.control(data)) }
+        let frames: [Frame]
+        do {
+            frames = try messages.map { .control(try MessageCodec.encode($0)) }
+        } catch {
+            queue.async {
+                self.finish(error, reportEvenIfLocallyClosed: true)
+                self.connection.cancel()
+            }
+            return
         }
+        frames.forEach(write)
         connection.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { error in
             if let error { self.fail(error) }
         })
@@ -138,13 +148,13 @@ public final class FramedConnection: @unchecked Sendable {
         connection.cancel()
     }
 
-    private func finish(_ error: Error?) {
+    private func finish(_ error: Error?, reportEvenIfLocallyClosed: Bool = false) {
         guard !finished else { return }
         finished = true
         linger?.cancel()
         linger = nil
         let handler = onEvent
         onEvent = nil
-        handler?(.closed(isLocallyClosed ? nil : error))
+        handler?(.closed(isLocallyClosed && !reportEvenIfLocallyClosed ? nil : error))
     }
 }

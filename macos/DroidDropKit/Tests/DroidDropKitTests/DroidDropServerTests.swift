@@ -5,12 +5,15 @@ import Testing
 @Suite struct DroidDropServerTests {
     let phone = try! Identity.generate(commonName: "Phone")
 
-    func makeServer() async throws -> (DroidDropServer, UInt16) {
+    func makeServer(peersURL: URL = temporaryDirectory().appending(path: "peers.json"),
+                    idleTimeout: TimeInterval = DroidDropServer.idleTimeout,
+                    configure: (DroidDropServer) -> Void = { _ in }) async throws -> (DroidDropServer, UInt16) {
         let server = DroidDropServer(
             identity: try Identity.generate(commonName: "Mac"),
-            peers: PeerStore(url: temporaryDirectory().appending(path: "peers.json")),
-            configuration: .init(name: "Test Mac", port: 0, advertise: false)
+            peers: try PeerStore(url: peersURL),
+            configuration: .init(name: "Test Mac", port: 0, advertise: false, idleTimeout: idleTimeout)
         )
+        configure(server)
         return (server, try await server.start())
     }
 
@@ -113,7 +116,7 @@ import Testing
         defer { server.stop() }
         let (_, events) = try await pair(server, port: port)
 
-        server.unpair(fingerprint: phone.fingerprint)
+        try server.unpair(fingerprint: phone.fingerprint)
         try await events.expectClosed()
         #expect(server.pairedPeers().isEmpty)
 
@@ -122,15 +125,70 @@ import Testing
     }
 
     @Test func deliversAppMessages() async throws {
-        let (server, port) = try await makeServer()
-        defer { server.stop() }
         let received = EventRecorder()
-        server.onMessage = { _, message in received.record(.frame(.control(try! MessageCodec.encode(message)))) }
+        let (server, port) = try await makeServer { server in
+            server.onMessage = { _, message in received.record(.frame(.control(try! MessageCodec.encode(message)))) }
+        }
+        defer { server.stop() }
         let (connection, _) = try await pair(server, port: port)
 
         let clip = Message.clip(id: "5b2c8f9e-1d3a-4e7b-9c6d-0a1b2c3d4e5f", mime: "text/plain", text: "hi")
         connection.send(clip)
         #expect(try await received.nextMessage() == clip)
+    }
+
+    @Test func unpairBeforeHelloClosesTheNewSession() async throws {
+        let (server, port) = try await makeServer()
+        defer { server.stop() }
+        let (first, _) = try await pair(server, port: port)
+        first.cancel()
+        let (connection, events) = try TestClient.connect(port: port, identity: phone, pinnedServer: server.identity.fingerprint)
+        #expect(try await events.nextMessage() == .hello(v: 1, name: "Test Mac", platform: .macos))
+
+        try server.unpair(fingerprint: phone.fingerprint)
+        connection.send(.hello(v: 1, name: "Pixel", platform: .android))
+        connection.send(.ping(id: 3))
+        try await events.expectClosedWithoutFrames()
+        #expect(server.connectedPeers().isEmpty)
+    }
+
+    @Test func unpairReportsWriteFailureAndKeepsPeer() async throws {
+        let directory = temporaryDirectory()
+        let (server, port) = try await makeServer(peersURL: directory.appending(path: "peers.json"))
+        defer { server.stop() }
+        let (connection, events) = try await pair(server, port: port)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: directory.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path) }
+        #expect(throws: (any Error).self) { try server.unpair(fingerprint: phone.fingerprint) }
+        #expect(server.pairedPeers().map(\.fingerprint) == [phone.fingerprint])
+        connection.send(.ping(id: 4))
+        #expect(try await events.nextMessage() == .pong(id: 4))
+    }
+
+    @Test func silentPairedClientIsClosedAfterIdleTimeout() async throws {
+        let (server, port) = try await makeServer(idleTimeout: 0.5)
+        defer { server.stop() }
+        let (_, events) = try await pair(server, port: port)
+
+        let started = ContinuousClock.now
+        try await events.expectClosed()
+        #expect(ContinuousClock.now - started < .seconds(3))
+        #expect(server.connectedPeers().isEmpty)
+    }
+
+    @Test func peerStoreKeepsCorruptFileAndThrows() throws {
+        let url = temporaryDirectory().appending(path: "peers.json")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let corrupt = Data("{not json".utf8)
+        try corrupt.write(to: url)
+
+        #expect(throws: (any Error).self) { try PeerStore(url: url) }
+        #expect(try Data(contentsOf: url) == corrupt)
+    }
+
+    @Test func peerStoreStartsEmptyWithoutFile() throws {
+        #expect(try PeerStore(url: temporaryDirectory().appending(path: "peers.json")).all.isEmpty)
     }
 
     @Test func localAddressesAreRoutableIPv4() {

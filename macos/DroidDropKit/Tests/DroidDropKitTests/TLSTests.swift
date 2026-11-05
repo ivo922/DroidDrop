@@ -109,6 +109,18 @@ private func isTLSError(_ error: Error?) -> Bool {
         #expect(error == nil)
     }
 
+    @Test func closeWithUnencodableFinalMessageReportsError() async throws {
+        let server = try LoopbackServer(identity: serverIdentity) { _ in true }
+        let port = try await server.start()
+        let (client, clientEvents) = try TestClient.connect(port: port, identity: clientIdentity, pinnedServer: serverIdentity.fingerprint)
+
+        guard case .ready = try await clientEvents.next() else { Issue.record("client never became ready"); return }
+        client.close(final: [.unknown(type: "nope")])
+        guard case .closed(let error) = try await clientEvents.next() else { Issue.record("expected closed"); return }
+        #expect(error != nil)
+        withExtendedLifetime(server) {}
+    }
+
     @Test func noFramesDeliveredAfterHandlerCancels() async throws {
         let server = try LoopbackServer(identity: serverIdentity) { _ in true }
         let port = try await server.start()

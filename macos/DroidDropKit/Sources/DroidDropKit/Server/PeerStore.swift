@@ -17,9 +17,17 @@ public final class PeerStore {
     private let url: URL
     public private(set) var all: [Peer]
 
-    public init(url: URL) {
+    /// Starts empty only if the file does not exist; an unreadable or corrupt file throws and is left untouched.
+    public init(url: URL) throws {
         self.url = url
-        all = (try? JSONDecoder().decode([Peer].self, from: Data(contentsOf: url))) ?? []
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch CocoaError.fileReadNoSuchFile {
+            all = []
+            return
+        }
+        all = try JSONDecoder().decode([Peer].self, from: data)
     }
 
     public func contains(_ fingerprint: Data) -> Bool {
