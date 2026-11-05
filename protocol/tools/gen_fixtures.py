@@ -112,6 +112,7 @@ def messages():
             {"name": "pair_request_short_proof", "raw": "{\"type\":\"pair_request\",\"proof\":\"" + b64url(bytes(31)) + "\"}"},
             {"name": "pair_request_padded_proof", "raw": "{\"type\":\"pair_request\",\"proof\":\"" + b64url(bytes(32)) + "=\"}"},
             {"name": "pair_result_ok_without_proof", "raw": "{\"type\":\"pair_result\",\"ok\":true}"},
+            {"name": "file_result_reason_object", "raw": "{\"type\":\"file_result\",\"transferId\":\"" + tid + "\",\"ok\":false,\"reason\":{}}"},
             {"name": "ping_negative", "raw": "{\"type\":\"ping\",\"id\":-1}"},
             {"name": "ping_fraction", "raw": "{\"type\":\"ping\",\"id\":1.5}"},
             {"name": "clip_uppercase_uuid", "raw": "{\"type\":\"clip\",\"id\":\"5B2C8F9E-1D3A-4E7B-9C6D-0A1B2C3D4E5F\",\"mime\":\"text/plain\",\"text\":\"x\"}"},

@@ -238,6 +238,10 @@
       "raw": "{\"type\":\"pair_result\",\"ok\":true}"
     },
     {
+      "name": "file_result_reason_object",
+      "raw": "{\"type\":\"file_result\",\"transferId\":\"0f8e2d1c-3b4a-4c5d-8e6f-7a8b9c0d1e2f\",\"ok\":false,\"reason\":{}}"
+    },
+    {
       "name": "ping_negative",
       "raw": "{\"type\":\"ping\",\"id\":-1}"
     },
