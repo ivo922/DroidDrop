@@ -43,12 +43,15 @@ class ClientSession(
         return listOf(ClientAction.Send(hello), ClientAction.Send(ping))
     }
 
-    /** A keepalive ping; ids continue the sequence started by the confirmation ping. */
+    /**
+     * A keepalive ping; ids continue the sequence started by the confirmation ping.
+     * Callers must only send it after [ClientAction.Connected]: an unpaired client may not ping before pairing completes.
+     */
     fun nextPing(): Message.Ping = Message.Ping(pingIds.getAndIncrement())
 
     fun receive(message: Message): List<ClientAction> {
         check(phase != Phase.NEW) { "session not started" }
-        if (message is Message.Unknown) return emptyList()
+        if (message is Message.Unknown && phase != Phase.AWAITING_HELLO) return emptyList()
         return when (phase) {
             Phase.NEW, Phase.CLOSED -> emptyList()
             Phase.AWAITING_HELLO -> onHello(message)

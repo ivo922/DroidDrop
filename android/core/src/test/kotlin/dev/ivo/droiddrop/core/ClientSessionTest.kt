@@ -97,7 +97,6 @@ class ClientSessionTest {
     @Test
     fun unknownTypeDuringPairingIsIgnored() {
         val session = started(secret)
-        assertEquals(emptyList<ClientAction>(), session.receive(Message.Unknown("future")))
         session.receive(hello)
         assertEquals(emptyList<ClientAction>(), session.receive(Message.Unknown("future")))
         val serverProof = Base64Url.encode(Pairing.serverProof(secret, serverFp, clientFp))
@@ -151,8 +150,33 @@ class ClientSessionTest {
     }
 
     @Test
+    fun pingDuringPairingCloses() {
+        val session = started(secret)
+        session.receive(hello)
+        assertEquals(listOf(ClientAction.Close("expected pair_result")), session.receive(Message.Ping(1)))
+    }
+
+    @Test
+    fun otherPongBeforeConfirmationIsHeldThenDelivered() {
+        val session = started(pairingSecret = null)
+        session.receive(hello)
+        assertEquals(emptyList<ClientAction>(), session.receive(Message.Pong(9)))
+        assertEquals(
+            listOf(ClientAction.Connected("MacBook"), ClientAction.Deliver(Message.Pong(9))),
+            session.receive(Message.Pong(0)),
+        )
+    }
+
+    @Test
+    fun serverCloseBeforeHelloCloses() {
+        assertEquals(listOf(ClientAction.Close("server closed before session was established")), started(null).endOfStream())
+    }
+
+    @Test
     fun requiresHelloFirstWithVersionOne() {
         assertEquals(listOf(ClientAction.Close("expected hello")), started(null).receive(Message.Ping(1)))
+        assertEquals(listOf(ClientAction.Close("expected hello")), started(null).receive(Message.Unknown("future")))
+        assertEquals(listOf(ClientAction.Close("expected hello")), started(secret).receive(Message.Unknown("future")))
         assertEquals(
             listOf(ClientAction.Close("unsupported protocol version 2")),
             started(null).receive(Message.Hello(2, "MacBook", Platform.MACOS)),
