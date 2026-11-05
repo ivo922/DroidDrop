@@ -25,6 +25,7 @@ cleanup() {
         echo "===== server.log ====="
         cat "$WORK/server.log"
     fi
+    rm -rf "$WORK"
     exit "$status"
 }
 trap cleanup EXIT
