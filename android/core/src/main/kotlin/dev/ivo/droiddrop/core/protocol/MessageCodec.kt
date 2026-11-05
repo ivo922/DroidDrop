@@ -18,7 +18,6 @@ object MessageCodec {
     private val uuidPattern = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
     private val sha256Pattern = Regex("^[0-9a-f]{64}$")
 
-    // kotlinx parses unquoted tokens leniently (01, +1, TRUE), so literals are checked by their raw text.
     private val integerPattern = Regex("^(0|[1-9][0-9]*)$")
 
     fun decode(bytes: ByteArray): Message {
