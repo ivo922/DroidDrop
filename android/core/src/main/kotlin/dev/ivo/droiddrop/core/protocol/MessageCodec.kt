@@ -7,7 +7,6 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.nio.ByteBuffer
@@ -18,6 +17,9 @@ object MessageCodec {
     private const val MAX_INTEGER = 9_007_199_254_740_991L
     private val uuidPattern = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
     private val sha256Pattern = Regex("^[0-9a-f]{64}$")
+
+    // kotlinx parses unquoted tokens leniently (01, +1, TRUE), so literals are checked by their raw text.
+    private val integerPattern = Regex("^(0|[1-9][0-9]*)$")
 
     fun decode(bytes: ByteArray): Message {
         val text = try {
@@ -124,14 +126,19 @@ object MessageCodec {
 
     private fun JsonObject.integer(key: String): Long {
         val p = primitive(key)
-        val value = if (p.isString) null else p.content.toLongOrNull()
+        val value = if (p.isString || !integerPattern.matches(p.content)) null else p.content.toLongOrNull()
         if (value == null || value !in 0..MAX_INTEGER) throw invalid("'$key' must be an integer in 0..2^53-1")
         return value
     }
 
     private fun JsonObject.boolean(key: String): Boolean {
         val p = primitive(key)
-        return (if (p.isString) null else p.booleanOrNull) ?: throw invalid("'$key' must be a boolean")
+        if (p.isString) throw invalid("'$key' must be a boolean")
+        return when (p.content) {
+            "true" -> true
+            "false" -> false
+            else -> throw invalid("'$key' must be a boolean")
+        }
     }
 
     private fun JsonObject.uuid(key: String): String =

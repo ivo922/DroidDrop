@@ -70,5 +70,6 @@ class MessageCodecTest {
         assertNull(Base64Url.decode32("$text="))
         assertNull(Base64Url.decode32(text.dropLast(1)))
         assertNull(Base64Url.decode("ab+/"))
+        assertNull(Base64Url.decode32("A".repeat(42) + "B"))
     }
 }

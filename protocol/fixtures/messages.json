@@ -234,6 +234,10 @@
       "raw": "{\"type\":\"pair_request\",\"proof\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}"
     },
     {
+      "name": "pair_request_noncanonical_proof",
+      "raw": "{\"type\":\"pair_request\",\"proof\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\"}"
+    },
+    {
       "name": "pair_result_ok_without_proof",
       "raw": "{\"type\":\"pair_result\",\"ok\":true}"
     },
@@ -248,6 +252,18 @@
     {
       "name": "ping_fraction",
       "raw": "{\"type\":\"ping\",\"id\":1.5}"
+    },
+    {
+      "name": "ping_leading_zero",
+      "raw": "{\"type\":\"ping\",\"id\":01}"
+    },
+    {
+      "name": "ping_plus_sign",
+      "raw": "{\"type\":\"ping\",\"id\":+1}"
+    },
+    {
+      "name": "file_result_ok_uppercase",
+      "raw": "{\"type\":\"file_result\",\"transferId\":\"0f8e2d1c-3b4a-4c5d-8e6f-7a8b9c0d1e2f\",\"ok\":TRUE}"
     },
     {
       "name": "clip_uppercase_uuid",

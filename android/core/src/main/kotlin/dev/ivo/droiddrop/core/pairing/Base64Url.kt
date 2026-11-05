@@ -7,10 +7,11 @@ object Base64Url {
 
     fun encode(bytes: ByteArray): String = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
 
-    /** Strict: unpadded base64url alphabet only. */
+    /** Strict: unpadded base64url alphabet only, canonical (unused trailing bits zero). */
     fun decode(text: String): ByteArray? {
         if (!alphabet.matches(text) || text.length % 4 == 1) return null
-        return runCatching { Base64.getUrlDecoder().decode(text) }.getOrNull()
+        val bytes = runCatching { Base64.getUrlDecoder().decode(text) }.getOrNull() ?: return null
+        return bytes.takeIf { encode(it) == text }
     }
 
     /** Exactly 32 bytes (43 characters): fingerprints, secrets, proofs. */
