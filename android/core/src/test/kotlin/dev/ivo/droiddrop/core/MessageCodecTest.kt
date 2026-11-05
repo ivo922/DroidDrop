@@ -26,6 +26,14 @@ class MessageCodecTest {
     }
 
     @Test
+    fun rawSpellingsDecodeLikeTheirCanonicalJson() {
+        for (entry in fixture.list("validRaw")) {
+            val canonical = MessageCodec.decode(entry.getValue("json").toString().toByteArray())
+            assertEquals(canonical, MessageCodec.decode(entry.str("raw").toByteArray()), entry.str("name"))
+        }
+    }
+
+    @Test
     fun unknownMembersAreDropped() {
         for (entry in fixture.list("normalized")) {
             assertEquals(entry.getValue("output"), roundTrip(entry.getValue("input").toString()), entry.str("name"))

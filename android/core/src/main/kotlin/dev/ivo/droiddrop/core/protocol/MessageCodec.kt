@@ -27,6 +27,7 @@ object MessageCodec {
         } catch (e: CharacterCodingException) {
             throw invalid("payload is not UTF-8")
         }
+        StrictJson.validate(bytes)
         val element = try {
             Json.parseToJsonElement(text)
         } catch (e: SerializationException) {
