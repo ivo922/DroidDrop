@@ -3,6 +3,7 @@ package dev.ivo.droiddrop
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
@@ -43,22 +44,30 @@ import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private val scope = MainScope()
-    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    private var scanAfterLocalNetworkGrant = false
+    private var permissionRequestOpen = false
     private lateinit var store: PairingStore
+
+    private val runtimePermissions = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { _ ->
+        permissionRequestOpen = false
+        if (localNetworkAllowed()) {
+            resumeSavedConnection()
+            if (scanAfterLocalNetworkGrant) {
+                scanAfterLocalNetworkGrant = false
+                scanPairingCode()
+            }
+        } else if (scanAfterLocalNetworkGrant) {
+            scanAfterLocalNetworkGrant = false
+            Toast.makeText(this, "Local network access is required to reach your Mac.", Toast.LENGTH_LONG).show()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = PairingStore(this)
-
-        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
-        store.load()?.let { mac ->
-            if (ConnectionStatus.state.value == ConnectionState.Unpaired) {
-                ConnectionStatus.state.value = ConnectionState.Searching(mac.name)
-            }
-            ConnectionService.start(this)
-        }
+        requestMissingPermissions()
 
         setContent {
             MaterialTheme {
@@ -86,12 +95,52 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (localNetworkAllowed()) resumeSavedConnection() else ConnectionService.stop(this)
+    }
+
     override fun onDestroy() {
         scope.cancel()
         super.onDestroy()
     }
 
+    /** Android 17 blocks LAN sockets until this runtime permission is granted. Older releases allow them with INTERNET. */
+    private fun localNetworkAllowed(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.CINNAMON_BUN ||
+            checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) == PackageManager.PERMISSION_GRANTED
+
+    private fun requestMissingPermissions() {
+        val missing = buildList {
+            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN &&
+                checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) != PackageManager.PERMISSION_GRANTED
+            ) {
+                add(Manifest.permission.ACCESS_LOCAL_NETWORK)
+            }
+        }
+        if (missing.isEmpty() || permissionRequestOpen) return
+        permissionRequestOpen = true
+        runtimePermissions.launch(missing.toTypedArray())
+    }
+
+    private fun resumeSavedConnection() {
+        store.load()?.let { mac ->
+            if (ConnectionStatus.state.value == ConnectionState.Unpaired) {
+                ConnectionStatus.state.value = ConnectionState.Searching(mac.name)
+            }
+            ConnectionService.start(this)
+        }
+    }
+
     private fun scanPairingCode() {
+        if (!localNetworkAllowed()) {
+            scanAfterLocalNetworkGrant = true
+            requestMissingPermissions()
+            return
+        }
         scope.launch {
             AndroidIdentity.awaitPendingDelete()
             val options = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
