@@ -4,6 +4,7 @@ import SwiftUI
 struct PairingView: View {
     @ObservedObject var model: AppModel
     let close: () -> Void
+    @State private var confirmCopy = false
 
     var body: some View {
         VStack(spacing: 16) {
@@ -28,12 +29,16 @@ struct PairingView: View {
                 }
                 Text("Mac code: \(model.macCode)").font(.caption.monospaced()).foregroundStyle(.secondary)
                 HStack {
-                    Button("Copy Pairing Link") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(uri.string, forType: .string)
-                    }
+                    Button("Copy Pairing Link") { confirmCopy = true }
                     Button("New Code") { model.startPairing() }
                 }
+                .alert("Copy pairing link?", isPresented: $confirmCopy) {
+                    Button("Copy") { copyPairingLink(uri.string) }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("The link includes the pairing secret. Any app on this Mac can read it from the clipboard.")
+                }
+                .onDisappear { clearPairingLink(uri.string) }
             } else if let error = model.serverError {
                 Text(model.isListening ? "Pairing unavailable" : "Not listening")
                     .font(.headline)
@@ -49,5 +54,15 @@ struct PairingView: View {
         }
         .padding(24)
         .frame(width: 340, height: 480, alignment: .center)
+    }
+
+    private func copyPairingLink(_ link: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(link, forType: .string)
+    }
+
+    private func clearPairingLink(_ link: String) {
+        guard NSPasteboard.general.string(forType: .string) == link else { return }
+        NSPasteboard.general.clearContents()
     }
 }
