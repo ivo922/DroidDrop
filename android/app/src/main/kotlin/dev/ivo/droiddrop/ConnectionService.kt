@@ -75,10 +75,16 @@ class ConnectionService : Service() {
                     val identity = withContext(Dispatchers.IO) { AndroidIdentity.loadOrCreate() }
                     currentCoroutineContext().ensureActive()
                     val client = DroidDropClient(identity, deviceName())
-                    // pair() blocks in client.run until that session ends. A normal return always
-                    // continues; connectLoop stopSelfs when the store is empty. CancellationException propagates.
-                    if (pairUri != null) pair(client, pairUri)
-                    connectLoop(client)
+                    // pair() blocks in client.run until that session ends. A failed first pair
+                    // leaves Failed on screen. A failed re-pair keeps that message until the saved
+                    // Mac connects or the first search round ends. CancellationException propagates.
+                    if (pairUri != null) {
+                        val paired = pair(client, pairUri)
+                        if (!paired && store.load() == null) return@withLock
+                        connectLoop(client, keepFailure = !paired)
+                    } else {
+                        connectLoop(client)
+                    }
                 }
             }
         }
@@ -128,9 +134,10 @@ class ConnectionService : Service() {
         return false
     }
 
-    private suspend fun connectLoop(client: DroidDropClient) {
+    private suspend fun connectLoop(client: DroidDropClient, keepFailure: Boolean = false) {
         var backoff = INITIAL_BACKOFF_MILLIS
         val rejections = RejectionCounter()
+        var announceSearch = !keepFailure
         while (true) {
             currentCoroutineContext().ensureActive()
             val mac = store.load() ?: run {
@@ -138,7 +145,7 @@ class ConnectionService : Service() {
                 stopSelf()
                 return
             }
-            ConnectionStatus.state.value = ConnectionState.Searching(mac.name)
+            if (announceSearch) ConnectionStatus.state.value = ConnectionState.Searching(mac.name)
             val fingerprint = Base64Url.decode32(mac.fingerprint)!!
             val candidates = buildList {
                 locator.find(mac.fingerprint)?.let(::add)
@@ -179,6 +186,7 @@ class ConnectionService : Service() {
                 if (connected) break
             }
 
+            announceSearch = true
             if (connected) {
                 backoff = INITIAL_BACKOFF_MILLIS
                 continue
