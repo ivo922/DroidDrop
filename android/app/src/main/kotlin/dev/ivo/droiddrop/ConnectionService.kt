@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
 import android.util.Log
+import dev.ivo.droiddrop.core.clipboard.ClipRules
 import dev.ivo.droiddrop.core.pairing.Base64Url
 import dev.ivo.droiddrop.core.pairing.PairUri
 import dev.ivo.droiddrop.core.protocol.Message
@@ -44,12 +45,14 @@ class ConnectionService : Service() {
     }
     private lateinit var store: PairingStore
     private lateinit var locator: MacLocator
+    private lateinit var clipboard: ClipboardWriter
     private var loop: Job? = null
 
     override fun onCreate() {
         super.onCreate()
         store = PairingStore(this)
         locator = MacLocator(this)
+        clipboard = ClipboardWriter.forContext(this)
         Notifications.createChannel(this)
         getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(networkCallback)
         scope.launch {
@@ -230,8 +233,20 @@ class ConnectionService : Service() {
             ConnectionStatus.state.value = ConnectionState.Connected(serverName)
         }
 
+        // Runs on the session's IO thread and must not throw. Clip text is never logged.
         override fun onMessage(message: Message) {
-            Log.d(TAG, "received $message")
+            if (message !is Message.Clip) {
+                Log.d(TAG, "received $message")
+                return
+            }
+            val text = ClipRules.acceptIncoming(message)
+            if (text == null) {
+                Log.d(TAG, "ignored clip ${message.id}")
+                return
+            }
+            scope.launch(Dispatchers.Main) {
+                if (!clipboard.write(text)) Log.w(TAG, "could not apply clip ${message.id}")
+            }
         }
     }
 
