@@ -3,7 +3,6 @@ package dev.ivo.droiddrop
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
@@ -121,11 +120,7 @@ class MainActivity : ComponentActivity() {
             if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 add(Manifest.permission.POST_NOTIFICATIONS)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN &&
-                checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) != PackageManager.PERMISSION_GRANTED
-            ) {
-                add(Manifest.permission.ACCESS_LOCAL_NETWORK)
-            }
+            if (!LocalNetwork.allowed(this@MainActivity)) add(Manifest.permission.ACCESS_LOCAL_NETWORK)
         }
         if (missing.isEmpty() || permissionRequestOpen) return
         permissionRequestOpen = true
@@ -133,12 +128,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun resumeSavedConnection() {
-        store.load()?.let { mac ->
-            if (ConnectionStatus.state.value == ConnectionState.Unpaired) {
-                ConnectionStatus.state.value = ConnectionState.Searching(mac.name)
-            }
-            ConnectionService.start(this)
-        }
+        if (store.load() != null) ConnectionService.start(this)
     }
 
     private fun scanPairingCode() {

@@ -32,6 +32,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withTimeoutOrNull
 
 class ConnectionService : Service() {
@@ -64,12 +65,13 @@ class ConnectionService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val pairUri = intent?.getStringExtra(EXTRA_PAIR_URI)?.let(PairUri::parse)
+        if (pairUri == null) ConnectionStatus.state.update { it.onServiceStart(store.load()?.name) }
         startForeground(
             Notifications.ID,
             Notifications.build(this, ConnectionStatus.state.value),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
         )
-        val pairUri = intent?.getStringExtra(EXTRA_PAIR_URI)?.let(PairUri::parse)
         if (pairUri != null || loop?.isActive != true) {
             loop?.cancel()
             loop = scope.launch {

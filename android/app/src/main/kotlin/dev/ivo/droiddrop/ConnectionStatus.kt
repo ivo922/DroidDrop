@@ -18,6 +18,10 @@ fun ConnectionState.describe(): String = when (this) {
     is ConnectionState.Failed -> message
 }
 
+/** The state to show when the service starts to reconnect: a fresh process says Unpaired until told otherwise. */
+fun ConnectionState.onServiceStart(savedMacName: String?): ConnectionState =
+    if (this == ConnectionState.Unpaired && savedMacName != null) ConnectionState.Searching(savedMacName) else this
+
 /** Process-wide connection state, written by ConnectionService and observed by the UI. */
 object ConnectionStatus {
     val state = MutableStateFlow<ConnectionState>(ConnectionState.Unpaired)
