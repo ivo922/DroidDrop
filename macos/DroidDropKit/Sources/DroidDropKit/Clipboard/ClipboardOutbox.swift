@@ -1,6 +1,12 @@
 import AppKit
 import CryptoKit
 
+/// nspasteboard.org markers: password managers set them, and clipboard tools must not sync or keep such items.
+public enum PasteboardMarkers {
+    public static let concealed = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
+    public static let transient = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
+}
+
 /// The parts of a pasteboard the outbox decides on.
 public struct PasteboardContents: Equatable, Sendable {
     public var types: [String]
@@ -11,8 +17,11 @@ public struct PasteboardContents: Equatable, Sendable {
         self.text = text
     }
 
+    /// Reads types first and leaves the text of skipped items unread: reading it may raise a macOS access alert.
     public static func read(from pasteboard: NSPasteboard) -> PasteboardContents {
-        PasteboardContents(types: pasteboard.types?.map(\.rawValue) ?? [], text: pasteboard.string(forType: .string))
+        let types = pasteboard.types?.map(\.rawValue) ?? []
+        guard ClipboardOutbox.skippedTypes.isDisjoint(with: types) else { return PasteboardContents(types: types, text: nil) }
+        return PasteboardContents(types: types, text: pasteboard.string(forType: .string))
     }
 }
 
@@ -24,9 +33,9 @@ public struct ClipboardOutbox {
     public static let maxTextBytes = 262_144
     /// Password managers (nspasteboard.org markers) and Finder file copies, whose text is only the file name.
     public static let skippedTypes: Set<String> = [
-        "org.nspasteboard.ConcealedType",
-        "org.nspasteboard.TransientType",
-        "public.file-url",
+        PasteboardMarkers.concealed.rawValue,
+        PasteboardMarkers.transient.rawValue,
+        NSPasteboard.PasteboardType.fileURL.rawValue,
     ]
 
     private let makeID: () -> String
@@ -55,6 +64,11 @@ public struct ClipboardOutbox {
         // JSON escaping can more than double the text (U+0001 becomes six bytes), so check the frame too.
         guard let encoded = try? MessageCodec.encode(clip), encoded.count <= FrameLimits.maxControlPayload else { return nil }
         return clip
+    }
+
+    /// Makes the next poll record a new baseline, so changes made in between are never sent.
+    public mutating func resetBaseline() {
+        lastChangeCount = nil
     }
 
     /// Records the text of a clip applied from the phone so it is not sent back.

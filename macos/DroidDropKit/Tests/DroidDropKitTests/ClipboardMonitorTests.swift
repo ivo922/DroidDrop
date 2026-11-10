@@ -7,10 +7,10 @@ final class Sent {
 }
 
 @MainActor @Suite struct ClipboardMonitorTests {
-    func makeMonitor(isActive: @escaping @MainActor () -> Bool = { true }) -> (NSPasteboard, ClipboardMonitor, Sent) {
+    func makeMonitor() -> (NSPasteboard, ClipboardMonitor, Sent) {
         let pasteboard = NSPasteboard(name: .init("dev.ivo.droiddrop.tests.\(UUID().uuidString)"))
         let sent = Sent()
-        let monitor = ClipboardMonitor(pasteboard: pasteboard, isActive: isActive) { sent.messages.append($0) }
+        let monitor = ClipboardMonitor(pasteboard: pasteboard) { sent.messages.append($0) }
         return (pasteboard, monitor, sent)
     }
 
@@ -48,19 +48,44 @@ final class Sent {
         #expect(sent.messages.isEmpty)
     }
 
-    @Test func copiesWhileInactiveAreNeitherSentNorReplayed() {
-        var active = false
-        let (pasteboard, monitor, sent) = makeMonitor(isActive: { active })
-        defer { pasteboard.releaseGlobally() }
-        monitor.tick()
-        pasteboard.clearContents(); pasteboard.setString("no phone yet", forType: .string)
-        monitor.tick()
-        active = true
-        monitor.tick()
-        #expect(sent.messages.isEmpty)
+    @Test func copiesWhileStoppedAreNotSentAfterRestart() {
+        let (pasteboard, monitor, sent) = makeMonitor()
+        defer { pasteboard.releaseGlobally(); monitor.stop() }
+        monitor.start()
         pasteboard.clearContents(); pasteboard.setString("phone here", forType: .string)
         monitor.tick()
+        monitor.stop()
+        pasteboard.clearContents(); pasteboard.setString("no phone", forType: .string)
+        monitor.start()
+        monitor.tick()
         #expect(sent.messages.count == 1)
+        pasteboard.clearContents(); pasteboard.setString("phone back", forType: .string)
+        monitor.tick()
+        #expect(sent.messages.count == 2)
+    }
+
+    @Test func timerStopsAfterMonitorIsReleased() {
+        let pasteboard = NSPasteboard(name: .init("dev.ivo.droiddrop.tests.\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        weak var timer: Timer?
+        do {
+            let monitor = ClipboardMonitor(pasteboard: pasteboard) { _ in }
+            monitor.start()
+            timer = monitor.timer
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(ClipboardMonitor.pollInterval + 0.3))
+        #expect(timer?.isValid != true)
+    }
+
+    @Test func readLeavesTextOfMarkedItemsUnread() {
+        let pasteboard = NSPasteboard(name: .init("dev.ivo.droiddrop.tests.\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.declareTypes([.string, PasteboardMarkers.concealed], owner: nil)
+        pasteboard.setString("hunter2", forType: .string)
+        pasteboard.setData(Data(), forType: PasteboardMarkers.concealed)
+        let contents = PasteboardContents.read(from: pasteboard)
+        #expect(contents.text == nil)
+        #expect(contents.types.contains(PasteboardMarkers.concealed.rawValue))
     }
 
     @Test func pairingLinkCopyIsNotSent() {

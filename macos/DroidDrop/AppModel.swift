@@ -46,15 +46,13 @@ final class AppModel: ObservableObject {
             configuration: .init(name: Self.serverName())
         )
         self.server = server
-        // Reading the pasteboard can raise a macOS access alert, so only read while a phone can receive the clip.
-        let clipboard = ClipboardMonitor(isActive: { [weak self] in !(self?.connectedPeers.isEmpty ?? true) }) {
-            [weak server] message in server?.broadcast(message)
-        }
-        self.clipboard = clipboard
-        clipboard.start()
+        clipboard = ClipboardMonitor { [weak server] message in server?.broadcast(message) }
         server.onConnectedPeersChanged = { [weak self] peers in
             Task { @MainActor [weak self] in
-                self?.connectedPeers = peers
+                guard let self else { return }
+                self.connectedPeers = peers
+                // Watch the pasteboard only while a phone can receive clips (fewer wakeups, no access alerts).
+                if peers.isEmpty { self.clipboard?.stop() } else { self.clipboard?.start() }
             }
         }
         server.onPeerPaired = { [weak self] peer in

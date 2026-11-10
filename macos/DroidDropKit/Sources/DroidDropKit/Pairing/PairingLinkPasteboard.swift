@@ -2,10 +2,7 @@ import AppKit
 
 /// Copies the pairing link (which carries the pairing secret) without it being synced or kept by clipboard managers.
 public enum PairingLinkPasteboard {
-    private static let markers: [NSPasteboard.PasteboardType] = [
-        .init("org.nspasteboard.ConcealedType"),
-        .init("org.nspasteboard.TransientType"),
-    ]
+    private static let markers = [PasteboardMarkers.concealed, PasteboardMarkers.transient]
 
     /// Returns the pasteboard's change count after the write, for `clear(ifUnchangedSince:on:)`.
     @discardableResult
