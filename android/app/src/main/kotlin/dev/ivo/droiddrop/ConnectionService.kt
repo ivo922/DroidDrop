@@ -104,7 +104,8 @@ class ConnectionService : Service() {
         ConnectionStatus.state.value = ConnectionState.Pairing(uri.name)
         val fingerprint = Base64Url.decode32(uri.fingerprint)!!
         val secret = Base64Url.decode32(uri.secret)!!
-        var lastError: Exception? = null
+            var lastError: Exception? = null
+        var sawPinMismatch = false
         for (host in uri.hosts) {
             var paired = false
             try {
@@ -119,18 +120,20 @@ class ConnectionService : Service() {
                 throw e
             } catch (e: Exception) {
                 if (ReconnectPolicy.classify(e) == ReconnectPolicy.FailureKind.PinMismatch) {
+                    sawPinMismatch = true
                     Log.w(TAG, "pairing via $host rejected the pinned certificate", e)
-                    ConnectionStatus.state.value = ConnectionState.Failed(
-                        "The Mac's certificate does not match the pairing code.",
-                    )
-                    return false
+                } else {
+                    Log.w(TAG, "pairing via $host failed", e)
+                    lastError = e
                 }
-                Log.w(TAG, "pairing via $host failed", e)
-                lastError = e
             }
             if (paired) return true
         }
-        ConnectionStatus.state.value = ConnectionState.Failed("Pairing failed: ${lastError?.message ?: "Mac not reachable"}")
+        ConnectionStatus.state.value = if (sawPinMismatch && lastError == null) {
+            ConnectionState.Failed("The Mac's certificate does not match the pairing code.")
+        } else {
+            ConnectionState.Failed("Pairing failed: ${lastError?.message ?: "Mac not reachable"}")
+        }
         return false
     }
 
@@ -153,6 +156,8 @@ class ConnectionService : Service() {
             }.distinct()
 
             var connected = false
+            var pinMismatches = 0
+            var otherFailures = 0
             for (endpoint in candidates) {
                 try {
                     client.run(endpoint.host, endpoint.port, fingerprint, null, listener(
@@ -167,11 +172,13 @@ class ConnectionService : Service() {
                 } catch (e: Exception) {
                     if (!connected) {
                         when (rejections.onFailure(ReconnectPolicy.classify(e))) {
-                            RejectionCounter.Outcome.Backoff -> Log.w(TAG, "session with $endpoint ended", e)
+                            RejectionCounter.Outcome.Backoff -> {
+                                otherFailures++
+                                Log.w(TAG, "session with $endpoint ended", e)
+                            }
                             RejectionCounter.Outcome.UnpairPinMismatch -> {
-                                Log.w(TAG, "pinned Mac certificate changed", e)
-                                forgetPairing("The paired Mac's certificate changed. Pair again.")
-                                return
+                                pinMismatches++
+                                Log.w(TAG, "certificate at $endpoint did not match the pin", e)
                             }
                             RejectionCounter.Outcome.UnpairRejections -> {
                                 Log.w(TAG, "Mac rejected the phone", e)
@@ -184,6 +191,10 @@ class ConnectionService : Service() {
                     }
                 }
                 if (connected) break
+            }
+            if (!connected && pinMismatches > 0 && otherFailures == 0) {
+                forgetPairing("The paired Mac's certificate changed. Pair again.")
+                return
             }
 
             announceSearch = true
