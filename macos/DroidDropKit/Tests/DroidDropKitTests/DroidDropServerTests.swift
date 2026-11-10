@@ -137,6 +137,24 @@ import Testing
         #expect(try await received.nextMessage() == clip)
     }
 
+    @Test func broadcastReachesEstablishedSessions() async throws {
+        let (server, port) = try await makeServer()
+        defer { server.stop() }
+        let (_, events) = try await pair(server, port: port)
+        let clip = Message.clip(id: "6f1c0d2e-8a4b-4c3d-9e5f-0a1b2c3d4e5f", mime: "text/plain", text: "hi")
+        server.broadcast(clip)
+        #expect(try await events.nextMessage() == clip)
+    }
+
+    @Test func broadcastBeforeConnectIsNotReplayed() async throws {
+        let (server, port) = try await makeServer()
+        defer { server.stop() }
+        server.broadcast(.clip(id: "6f1c0d2e-8a4b-4c3d-9e5f-0a1b2c3d4e5f", mime: "text/plain", text: "stale"))
+        let (connection, events) = try await pair(server, port: port)
+        connection.send(.ping(id: 1))
+        #expect(try await events.nextMessage() == .pong(id: 1))
+    }
+
     @Test func unpairBeforeHelloClosesTheNewSession() async throws {
         let (server, port) = try await makeServer()
         defer { server.stop() }

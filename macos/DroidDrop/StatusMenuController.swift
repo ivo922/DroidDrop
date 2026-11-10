@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import DroidDropKit
 import ServiceManagement
 
 @MainActor
@@ -29,6 +30,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(disabled(model.statusLine))
         if let error = model.serverError { menu.addItem(disabled("Error: \(error)")) }
         if let error = model.unpairError { menu.addItem(disabled("Could not unpair: \(error)")) }
+        if let access = ClipboardAccess.menuMessage(for: NSPasteboard.general.accessBehavior) { menu.addItem(disabled(access)) }
         menu.addItem(.separator())
 
         menu.addItem(item("Pair New Phone…", #selector(pair)))

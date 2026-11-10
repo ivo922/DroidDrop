@@ -22,6 +22,7 @@ final class AppModel: ObservableObject {
 
     let macCode: String
     private let server: DroidDropServer?
+    private var clipboard: ClipboardMonitor?
     private var wantsPairing = false
 
     init() throws {
@@ -45,6 +46,12 @@ final class AppModel: ObservableObject {
             configuration: .init(name: Self.serverName())
         )
         self.server = server
+        // Reading the pasteboard can raise a macOS access alert, so only read while a phone can receive the clip.
+        let clipboard = ClipboardMonitor(isActive: { [weak self] in !(self?.connectedPeers.isEmpty ?? true) }) {
+            [weak server] message in server?.broadcast(message)
+        }
+        self.clipboard = clipboard
+        clipboard.start()
         server.onConnectedPeersChanged = { [weak self] peers in
             Task { @MainActor [weak self] in
                 self?.connectedPeers = peers

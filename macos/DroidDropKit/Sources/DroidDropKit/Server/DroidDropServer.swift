@@ -180,6 +180,11 @@ public final class DroidDropServer: @unchecked Sendable {
         queue.async { [weak self] in self?.sessions[fingerprint]?.framed.send(message) }
     }
 
+    /// Sends to every established session. Dropped when there is none; nothing is queued for later sessions.
+    public func broadcast(_ message: Message) {
+        queue.async { [weak self] in self?.sessions.values.forEach { $0.framed.send(message) } }
+    }
+
     // MARK: Sessions
 
     private func accept(_ connection: NWConnection) {
