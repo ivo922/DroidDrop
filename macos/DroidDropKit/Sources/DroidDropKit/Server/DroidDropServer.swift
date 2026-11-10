@@ -234,7 +234,8 @@ public final class DroidDropServer: @unchecked Sendable {
                 do {
                     try peers.add(peer)
                 } catch {
-                    session.framed.cancel()
+                    pairing.close()
+                    session.framed.close(final: [.pairResult(ok: false, proof: nil, reason: "store_failed")])
                     return
                 }
                 pairing.close()
