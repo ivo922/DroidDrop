@@ -52,7 +52,7 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { _ ->
         permissionRequestOpen = false
-        if (localNetworkAllowed()) {
+        if (LocalNetwork.allowed(this)) {
             resumeSavedConnection()
             if (scanAfterLocalNetworkGrant) {
                 scanAfterLocalNetworkGrant = false
@@ -97,7 +97,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (localNetworkAllowed()) {
+        if (LocalNetwork.allowed(this)) {
             resumeSavedConnection()
         } else {
             ConnectionService.stop(this)
@@ -115,11 +115,6 @@ class MainActivity : ComponentActivity() {
         scope.cancel()
         super.onDestroy()
     }
-
-    /** Android 17 blocks LAN sockets until this runtime permission is granted. Older releases allow them with INTERNET. */
-    private fun localNetworkAllowed(): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.CINNAMON_BUN ||
-            checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) == PackageManager.PERMISSION_GRANTED
 
     private fun requestMissingPermissions() {
         val missing = buildList {
@@ -147,7 +142,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun scanPairingCode() {
-        if (!localNetworkAllowed()) {
+        if (!LocalNetwork.allowed(this)) {
             scanAfterLocalNetworkGrant = true
             requestMissingPermissions()
             return
