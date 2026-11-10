@@ -97,7 +97,18 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (localNetworkAllowed()) resumeSavedConnection() else ConnectionService.stop(this)
+        if (localNetworkAllowed()) {
+            resumeSavedConnection()
+        } else {
+            ConnectionService.stop(this)
+            when (ConnectionStatus.state.value) {
+                is ConnectionState.Connected, is ConnectionState.Searching, is ConnectionState.Pairing ->
+                    ConnectionStatus.state.value = ConnectionState.Failed(
+                        "Local network access is required to reach your Mac.",
+                    )
+                else -> Unit
+            }
+        }
     }
 
     override fun onDestroy() {
