@@ -11,6 +11,7 @@ import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.security.cert.CertificateException
+import javax.net.ssl.SSLException
 import javax.net.ssl.SSLHandshakeException
 
 class ReconnectPolicyTest {
@@ -38,34 +39,36 @@ class ReconnectPolicyTest {
     }
 
     @Test
-    fun otherCertificateFailureAfterTcpCounts() {
-        val ssl = SSLHandshakeException("no cert")
-        ssl.initCause(CertificateException("peer sent no certificate"))
-        assertEquals(ReconnectPolicy.FailureKind.Rejection, ReconnectPolicy.classify(ssl))
+    fun certificateAlertFromTheMacCounts() {
+        val samples = listOf(
+            SSLHandshakeException("Received fatal alert: certificate_unknown"),
+            SSLHandshakeException(
+                "Read error: ssl=0x7b: Failure in SSL library, usually a protocol error\n" +
+                    "error:10000416:SSL routines:OPENSSL_internal:SSLV3_ALERT_CERTIFICATE_UNKNOWN",
+            ),
+        )
+        for (error in samples) {
+            assertEquals(ReconnectPolicy.FailureKind.Rejection, ReconnectPolicy.classify(error), error.toString())
+        }
     }
 
     @Test
-    fun handshakeFailureWithoutPinMismatchCounts() {
-        assertEquals(
-            ReconnectPolicy.FailureKind.Rejection,
-            ReconnectPolicy.classify(SSLHandshakeException("connection closed during handshake")),
+    fun networkFailuresAfterTcpDoNotCount() {
+        val noCert = SSLHandshakeException("no cert")
+        noCert.initCause(CertificateException("peer sent no certificate"))
+        val samples = listOf(
+            SocketException("Connection reset"),
+            SSLException("Read error: ssl=0x7b: I/O error during system call, Connection reset by peer"),
+            SSLHandshakeException("connection closed during handshake"),
+            SocketTimeoutException("Read timed out"),
+            noCert,
         )
-    }
-
-    @Test
-    fun readTimeoutAfterTcpCounts() {
-        assertEquals(
-            ReconnectPolicy.FailureKind.Rejection,
-            ReconnectPolicy.classify(SocketTimeoutException("Read timed out")),
-        )
-    }
-
-    @Test
-    fun connectionResetAfterTcpCounts() {
-        assertEquals(
-            ReconnectPolicy.FailureKind.Rejection,
-            ReconnectPolicy.classify(SocketException("Connection reset")),
-        )
+        val counter = RejectionCounter()
+        for (error in samples) {
+            assertEquals(ReconnectPolicy.FailureKind.Retry, ReconnectPolicy.classify(error), error.toString())
+            assertEquals(RejectionCounter.Outcome.Backoff, counter.onFailure(ReconnectPolicy.classify(error)))
+        }
+        assertEquals(0, counter.consecutive)
     }
 
     @Test
