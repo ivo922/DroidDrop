@@ -17,8 +17,10 @@ import Testing
         return (server, try await server.start())
     }
 
-    func pair(_ server: DroidDropServer, port: UInt16) async throws -> (FramedConnection, EventRecorder) {
-        let uri = server.openPairingWindow(hosts: ["127.0.0.1"])
+    func pair(_ server: DroidDropServer, port: UInt16, as phone: Identity? = nil,
+              replacing: Data? = nil) async throws -> (FramedConnection, EventRecorder) {
+        let phone = phone ?? self.phone
+        let uri = server.openPairingWindow(hosts: ["127.0.0.1"], replacing: replacing)
         #expect(uri.port == Int(port))
         let (connection, events) = try TestClient.connect(port: port, identity: phone, pinnedServer: uri.fingerprint)
         #expect(try await events.nextMessage() == .hello(v: 1, name: "Test Mac", platform: .macos))
@@ -135,6 +137,25 @@ import Testing
         let clip = Message.clip(id: "5b2c8f9e-1d3a-4e7b-9c6d-0a1b2c3d4e5f", mime: "text/plain", text: "hi")
         connection.send(clip)
         #expect(try await received.nextMessage() == clip)
+    }
+
+    @Test func pairAgainReplacesTheStalePeer() async throws {
+        let (server, port) = try await makeServer()
+        defer { server.stop() }
+        let (stale, _) = try await pair(server, port: port)
+        stale.cancel()
+        let reinstalled = try Identity.generate(commonName: "Phone")
+        _ = try await pair(server, port: port, as: reinstalled, replacing: phone.fingerprint)
+        #expect(server.pairedPeers().map(\.fingerprint) == [reinstalled.fingerprint])
+    }
+
+    @Test func pairNewPhoneKeepsExistingPeers() async throws {
+        let (server, port) = try await makeServer()
+        defer { server.stop() }
+        _ = try await pair(server, port: port)
+        let second = try Identity.generate(commonName: "Phone 2")
+        _ = try await pair(server, port: port, as: second)
+        #expect(Set(server.pairedPeers().map(\.fingerprint)) == [phone.fingerprint, second.fingerprint])
     }
 
     @Test func broadcastReachesEstablishedSessions() async throws {

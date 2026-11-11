@@ -38,9 +38,17 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             let devices = NSMenuItem(title: "Paired Devices", action: nil, keyEquivalent: "")
             let submenu = NSMenu()
             for peer in model.pairedPeers {
-                let unpair = item("Unpair \(peer.name)", #selector(unpair(_:)))
+                let status = model.isConnected(peer) ? "Connected" : "Not connected"
+                let device = NSMenuItem(title: "\(peer.name) — \(status)", action: nil, keyEquivalent: "")
+                let actions = NSMenu()
+                let pairAgain = item("Pair Again…", #selector(pairAgain(_:)))
+                pairAgain.representedObject = peer.fingerprint as NSData
+                actions.addItem(pairAgain)
+                let unpair = item("Unpair", #selector(unpair(_:)))
                 unpair.representedObject = peer.fingerprint as NSData
-                submenu.addItem(unpair)
+                actions.addItem(unpair)
+                device.submenu = actions
+                submenu.addItem(device)
             }
             devices.submenu = submenu
             menu.addItem(devices)
@@ -57,6 +65,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     @objc private func pair() {
         pairingWindow.show()
+    }
+
+    @objc private func pairAgain(_ sender: NSMenuItem) {
+        guard let fingerprint = sender.representedObject as? Data,
+              let peer = model.pairedPeers.first(where: { $0.fingerprint == fingerprint }) else { return }
+        pairingWindow.show(replacing: peer)
     }
 
     @objc private func unpair(_ sender: NSMenuItem) {

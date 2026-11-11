@@ -19,6 +19,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var unpairError: String?
     @Published private(set) var isListening = false
     @Published private(set) var noNetwork = false
+    /// The paired phone that "Pair Again" replaces; nil for a new phone.
+    @Published private(set) var replacingPeer: Peer?
 
     let macCode: String
     private let server: DroidDropServer?
@@ -101,14 +103,26 @@ final class AppModel: ObservableObject {
         return "Connected: " + connectedPeers.map(\.name).joined(separator: ", ")
     }
 
-    func startPairing() {
+    /// `replacing` is the stale entry a re-paired phone takes over, so it does not show up twice.
+    func startPairing(replacing peer: Peer? = nil) {
+        replacingPeer = peer
+        restartPairing()
+    }
+
+    /// A fresh code for the same pairing target.
+    func restartPairing() {
         wantsPairing = true
         justPaired = nil
         openPairingIfPossible()
     }
 
+    func isConnected(_ peer: Peer) -> Bool {
+        connectedPeers.contains { $0.fingerprint == peer.fingerprint }
+    }
+
     func cancelPairing() {
         wantsPairing = false
+        replacingPeer = nil
         noNetwork = false
         pairURI = nil
         pairingExpiresAt = nil
@@ -152,7 +166,7 @@ final class AppModel: ObservableObject {
             return
         }
         noNetwork = false
-        let uri = server.openPairingWindow(hosts: hosts)
+        let uri = server.openPairingWindow(hosts: hosts, replacing: replacingPeer?.fingerprint)
         guard PairURI(string: uri.string) != nil else {
             server.closePairingWindow()
             pairURI = nil

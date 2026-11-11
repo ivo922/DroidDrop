@@ -17,9 +17,12 @@ struct PairingView: View {
             } else if model.noNetwork {
                 Text("No network")
                     .font(.headline)
-                Button("Try Again") { model.startPairing() }
+                Button("Try Again") { model.restartPairing() }
             } else if let uri = model.pairURI, let expiresAt = model.pairingExpiresAt {
                 Text("Scan with DroidDrop on your phone").font(.headline)
+                if let peer = model.replacingPeer {
+                    Text("Replaces the pairing for \(peer.name)").font(.caption).foregroundStyle(.secondary)
+                }
                 if let image = QRCode.image(for: uri.string) {
                     Image(nsImage: image).interpolation(.none).resizable().frame(width: 260, height: 260)
                 }
@@ -32,7 +35,7 @@ struct PairingView: View {
                 Text("Mac code: \(model.macCode)").font(.caption.monospaced()).foregroundStyle(.secondary)
                 HStack {
                     Button("Copy Pairing Link") { confirmCopy = true }
-                    Button("New Code") { model.startPairing() }
+                    Button("New Code") { model.restartPairing() }
                 }
                 .alert("Copy pairing link?", isPresented: $confirmCopy) {
                     Button("Copy") { copiedChangeCount = PairingLinkPasteboard.copy(uri.string) }

@@ -32,6 +32,8 @@ public final class DroidDropServer: @unchecked Sendable {
     private let configuration: Configuration
     private let peers: PeerStore
     private let pairing = PairingWindow()
+    /// The stale peer that the open pairing window's new phone replaces ("Pair Again").
+    private var pairingReplaces: Data?
     private var listener: NWListener?
     private var port: UInt16?
     private var connections: [ObjectIdentifier: FramedConnection] = [:]
@@ -85,7 +87,7 @@ public final class DroidDropServer: @unchecked Sendable {
             self.listener?.cancel()
             self.listener = nil
             self.port = nil
-            self.pairing.close()
+            self.closePairing()
             self.connections.values.forEach { $0.cancel() }
         }
     }
@@ -144,17 +146,18 @@ public final class DroidDropServer: @unchecked Sendable {
 
     // MARK: Public operations
 
-    public func openPairingWindow(hosts: [String]) -> PairURI {
+    public func openPairingWindow(hosts: [String], replacing: Data? = nil) -> PairURI {
         dispatchPrecondition(condition: .notOnQueue(queue))
         return queue.sync {
-            PairURI(name: configuration.name, hosts: hosts, port: Int(port ?? configuration.port),
-                    fingerprint: identity.fingerprint, secret: pairing.open())
+            pairingReplaces = replacing
+            return PairURI(name: configuration.name, hosts: hosts, port: Int(port ?? configuration.port),
+                           fingerprint: identity.fingerprint, secret: pairing.open())
         }
     }
 
     public func closePairingWindow() {
         dispatchPrecondition(condition: .notOnQueue(queue))
-        queue.sync { pairing.close() }
+        queue.sync { closePairing() }
     }
 
     public func pairedPeers() -> [Peer] {
@@ -236,14 +239,16 @@ public final class DroidDropServer: @unchecked Sendable {
                 session.framed.send(reply)
             case .pairPeer(let name):
                 let peer = Peer(fingerprint: session.fingerprint, name: name, pairedAt: Date())
+                let replaced = pairingReplaces.flatMap { $0 == peer.fingerprint ? nil : $0 }
                 do {
-                    try peers.add(peer)
+                    if let replaced { try peers.replace(replaced, with: peer) } else { try peers.add(peer) }
                 } catch {
-                    pairing.close()
+                    closePairing()
                     session.framed.close(final: [.pairResult(ok: false, proof: nil, reason: "store_failed")])
                     return
                 }
-                pairing.close()
+                closePairing()
+                if let replaced { sessions[replaced]?.framed.cancel() }
                 onPeerPaired?(peer)
             case .close:
                 session.framed.close()
@@ -258,6 +263,11 @@ public final class DroidDropServer: @unchecked Sendable {
             }
             register(session)
         }
+    }
+
+    private func closePairing() {
+        pairing.close()
+        pairingReplaces = nil
     }
 
     private func register(_ session: Session) {

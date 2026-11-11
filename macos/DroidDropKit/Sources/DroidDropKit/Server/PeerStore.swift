@@ -45,6 +45,14 @@ public final class PeerStore {
         try save(updated)
     }
 
+    /// Adds `peer` and drops `old` in one write, for a phone that paired again with a new identity.
+    public func replace(_ old: Data, with peer: Peer) throws {
+        var updated = all
+        updated.removeAll { $0.fingerprint == old || $0.fingerprint == peer.fingerprint }
+        updated.append(peer)
+        try save(updated)
+    }
+
     public func remove(_ fingerprint: Data) throws {
         try save(all.filter { $0.fingerprint != fingerprint })
     }

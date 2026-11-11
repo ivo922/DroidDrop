@@ -1,4 +1,5 @@
 import AppKit
+import DroidDropKit
 import SwiftUI
 
 @MainActor
@@ -10,8 +11,8 @@ final class PairingWindowController: NSObject, NSWindowDelegate {
         self.model = model
     }
 
-    func show() {
-        model.startPairing()
+    func show(replacing peer: Peer? = nil) {
+        model.startPairing(replacing: peer)
         if window == nil {
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 340, height: 480),
