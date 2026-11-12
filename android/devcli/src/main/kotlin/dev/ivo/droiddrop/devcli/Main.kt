@@ -2,6 +2,7 @@ package dev.ivo.droiddrop.devcli
 
 import dev.ivo.droiddrop.core.pairing.Base64Url
 import dev.ivo.droiddrop.core.pairing.PairUri
+import dev.ivo.droiddrop.core.protocol.Frame
 import dev.ivo.droiddrop.core.protocol.Message
 import dev.ivo.droiddrop.core.protocol.MessageCodec
 import dev.ivo.droiddrop.core.session.DroidDropClient
@@ -9,6 +10,18 @@ import dev.ivo.droiddrop.core.session.MessageSender
 import dev.ivo.droiddrop.core.session.SessionListener
 import dev.ivo.droiddrop.core.testing.SelfSigned
 import dev.ivo.droiddrop.core.tls.DeviceIdentity
+import dev.ivo.droiddrop.core.transfer.DirectoryDestination
+import dev.ivo.droiddrop.core.transfer.FileReceiver
+import dev.ivo.droiddrop.core.transfer.FileSender
+import dev.ivo.droiddrop.core.transfer.OutgoingFile
+import dev.ivo.droiddrop.core.transfer.PartialStore
+import dev.ivo.droiddrop.core.transfer.TransferOutcome
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
@@ -17,6 +30,9 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.io.File
+import java.nio.channels.FileChannel
+import java.nio.file.Files
+import java.nio.file.StandardOpenOption
 import java.security.KeyStore
 import java.security.PrivateKey
 import java.security.cert.X509Certificate
@@ -36,12 +52,17 @@ fun main(args: Array<String>) {
     when (args.firstOrNull()) {
         "pair" -> pair(client, home, args.getOrNull(1) ?: usage())
         "connect" -> connect(client, home, ping = "--ping" in args)
+        "send" -> send(client, home, args.drop(1).ifEmpty { usage() })
+        "receive" -> receive(client, home, args.drop(1))
         else -> usage()
     }
 }
 
 private fun usage(): Nothing {
-    System.err.println("usage: devcli pair '<droiddrop://pair?...>' | devcli connect [--ping]")
+    System.err.println(
+        "usage: devcli pair '<droiddrop://pair?...>' | devcli connect [--ping] | devcli send <file>... | " +
+            "devcli receive <dir> [--count N]",
+    )
     exitProcess(2)
 }
 
@@ -96,6 +117,144 @@ private fun connect(client: DroidDropClient, home: File, ping: Boolean) {
         println("ERROR ${e.message}")
         exitProcess(1)
     }
+}
+
+/** Stdout lines are one event each, so embedded newlines would split them. */
+private fun oneLine(text: String) = text.replace('\n', ' ').replace('\r', ' ')
+
+private fun send(client: DroidDropClient, home: File, paths: List<String>) {
+    val server = loadServer(home) ?: run { println("ERROR not paired"); exitProcess(1) }
+    val unreadable = mutableListOf<String>()
+    val files = paths.mapNotNull { path ->
+        val file = File(path)
+        try {
+            val mime = try { Files.probeContentType(file.toPath()) } catch (_: Exception) { null }
+            OutgoingFile(file.name, mime ?: "application/octet-stream", FileChannel.open(file.toPath(), StandardOpenOption.READ))
+        } catch (e: Exception) {
+            unreadable += file.name
+            null
+        }
+    }
+    if (files.isEmpty()) {
+        unreadable.forEach { println("FAILED ${oneLine(it)} unreadable") }
+        exitProcess(1)
+    }
+    val fileSender = FileSender()
+    val replies = Channel<Message>(Channel.UNLIMITED)
+    var allSent = unreadable.isEmpty()
+    try {
+        runBlocking {
+            val scope = this
+            var senderJob: Job? = null
+            val outcomesJob = launch(start = CoroutineStart.UNDISPATCHED) {
+                fileSender.outcomes.take(files.size).collect { outcome ->
+                    when (outcome) {
+                        is TransferOutcome.Sent -> println("SENT ${oneLine(outcome.name)}")
+                        is TransferOutcome.Failed -> {
+                            allSent = false
+                            println("FAILED ${oneLine(outcome.name)} ${oneLine(outcome.reason)}")
+                        }
+                        is TransferOutcome.Received -> Unit
+                    }
+                }
+            }
+            val sessionJob = launch {
+                client.run(server.host, server.port, Base64Url.decode32(server.fingerprint)!!, null, object : SessionListener {
+                    override fun onConnected(serverName: String, sender: MessageSender) {
+                        println("CONNECTED $serverName")
+                        unreadable.forEach { println("FAILED ${oneLine(it)} unreadable") }
+                        fileSender.enqueue(files)
+                        senderJob = scope.launch(Dispatchers.IO) { fileSender.run(sender, replies) }
+                    }
+
+                    override fun onMessage(message: Message) {
+                        when (message) {
+                            is Message.FileAccept, is Message.FileReject, is Message.FileResult, is Message.FileCancel ->
+                                replies.trySend(message)
+                            else -> Unit
+                        }
+                    }
+                })
+            }
+            sessionJob.invokeOnCompletion { outcomesJob.cancel() }
+            try {
+                outcomesJob.join()
+            } finally {
+                sessionJob.cancel()
+                senderJob?.cancel()
+            }
+            sessionJob.join()
+            senderJob?.join()
+        }
+    } catch (e: Exception) {
+        println("ERROR ${oneLine(e.message ?: e.toString())}")
+        allSent = false
+    } finally {
+        files.forEach { it.release() }
+    }
+    exitProcess(if (allSent) 0 else 1)
+}
+
+private fun receive(client: DroidDropClient, home: File, args: List<String>) {
+    val directory = args.firstOrNull()?.takeUnless { it.startsWith("--") } ?: usage()
+    val count = when (args.size) {
+        1 -> 1
+        3 -> if (args[1] == "--count") args[2].toIntOrNull()?.takeIf { it > 0 } ?: usage() else usage()
+        else -> usage()
+    }
+    val server = loadServer(home) ?: run { println("ERROR not paired"); exitProcess(1) }
+    val receiver = FileReceiver(PartialStore(File(home, "partials")), DirectoryDestination(File(directory)))
+    var link: MessageSender? = null
+    var outcomes = 0
+    var allReceived = true
+
+    /** Sends the reply first, so the peer hears the verdict before the session is torn down. */
+    fun finish(reply: Message, outcome: TransferOutcome) {
+        link!!.send(reply)
+        when (outcome) {
+            is TransferOutcome.Received -> println("RECEIVED ${oneLine(outcome.location)}")
+            is TransferOutcome.Failed -> {
+                allReceived = false
+                println("FAILED ${oneLine(outcome.name)} ${oneLine(outcome.reason)}")
+            }
+            is TransferOutcome.Sent -> return
+        }
+        if (++outcomes >= count) throw Done()
+    }
+
+    try {
+        runBlocking {
+            client.run(server.host, server.port, Base64Url.decode32(server.fingerprint)!!, null, object : SessionListener {
+                override fun onConnected(serverName: String, sender: MessageSender) {
+                    link = sender
+                    println("CONNECTED $serverName")
+                }
+
+                override fun onMessage(message: Message) {
+                    when (message) {
+                        is Message.FileOffer -> link!!.send(receiver.offer(message))
+                        is Message.FileDone -> receiver.done(message)?.let { (reply, outcome) -> finish(reply, outcome) }
+                        is Message.FileCancel -> receiver.cancel(message.transferId)
+                        else -> Unit
+                    }
+                }
+
+                override fun onChunk(chunk: Frame.Chunk) {
+                    receiver.chunk(chunk)?.let { (reply, outcome) -> finish(reply, outcome) }
+                }
+            })
+        }
+        println("CLOSED")
+        allReceived = false
+    } catch (e: Done) {
+        // All expected files have an outcome.
+    } catch (e: Exception) {
+        println("ERROR ${oneLine(e.message ?: e.toString())}")
+        allReceived = false
+    } finally {
+        receiver.close()
+    }
+    exitProcess(if (allReceived) 0 else 1)
 }
 
 private fun loadOrCreateIdentity(file: File): DeviceIdentity {

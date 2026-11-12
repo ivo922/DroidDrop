@@ -14,7 +14,7 @@ func fail(_ error: Any) -> Never {
 }
 
 func usage() -> Never {
-    FileHandle.standardError.write(Data("usage: droiddrop-server [--port N] [--state DIR] [--host IP[,IP...]] [--advertise]\n".utf8))
+    FileHandle.standardError.write(Data("usage: droiddrop-server [--port N] [--state DIR] [--host IP[,IP...]] [--advertise] [--downloads DIR]\n".utf8))
     exit(2)
 }
 
@@ -22,6 +22,7 @@ var port: UInt16 = 47321
 var stateDirectory = FileManager.default.temporaryDirectory.appending(path: "droiddrop-server")
 var hosts = ["127.0.0.1"]
 var advertise = false
+var downloadsDirectory: URL?
 
 var arguments = CommandLine.arguments.dropFirst()
 while let argument = arguments.popFirst() {
@@ -39,6 +40,9 @@ while let argument = arguments.popFirst() {
         hosts = list
     case "--advertise":
         advertise = true
+    case "--downloads":
+        guard let value = arguments.popFirst(), !value.isEmpty else { usage() }
+        downloadsDirectory = URL(fileURLWithPath: value)
     default:
         usage()
     }
@@ -58,11 +62,27 @@ let server = DroidDropServer(
     peers: peers,
     configuration: .init(name: "droiddrop-server", port: port, advertise: advertise)
 )
+let transfers = FileTransfers(
+    server: server,
+    partials: PartialStore(directory: stateDirectory.appending(path: "partials")),
+    destination: downloadsDirectory ?? stateDirectory.appending(path: "downloads")
+)
+transfers.onOutcome = { _, outcome in
+    switch outcome {
+    case .received(_, let url):
+        emit("FILE_RECEIVED \(url.path)")
+    case .sent(let name):
+        emit("FILE_SENT \(name)")
+    case .failed(let direction, let name, let reason):
+        emit("FILE_FAILED \(direction == .incoming ? "in" : "out") \(name) \(reason)")
+    }
+}
 server.onPeerPaired = { emit("PAIRED \($0.name) \(Base64URL.encode($0.fingerprint))") }
 server.onConnectedPeersChanged = { emit("CONNECTED \($0.map(\.name).joined(separator: ","))") }
 server.onMessage = { peer, message in
     let json = (try? MessageCodec.encode(message)).map { String(decoding: $0, as: UTF8.self) } ?? "?"
     emit("MESSAGE \(peer.name) \(json)")
+    transfers.receive(message, from: peer.fingerprint)
 }
 
 /// Confined to the main queue.
@@ -113,6 +133,16 @@ Thread.detachNewThread {
                 continue
             }
             server.send(message, to: fingerprint)
+        case "send-file" where parts.count == 3:
+            guard let fingerprint = Base64URL.decode32(parts[1]) else {
+                emit("ERROR bad fingerprint")
+                continue
+            }
+            guard server.connectedPeers().contains(where: { $0.fingerprint == fingerprint }) else {
+                emit("ERROR peer not connected")
+                continue
+            }
+            transfers.send([URL(fileURLWithPath: parts[2])], to: fingerprint)
         default:
             emit("ERROR unknown command")
         }
