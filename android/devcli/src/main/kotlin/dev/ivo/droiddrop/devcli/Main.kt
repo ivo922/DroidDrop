@@ -142,12 +142,14 @@ private fun send(client: DroidDropClient, home: File, paths: List<String>) {
     val fileSender = FileSender()
     val replies = Channel<Message>(Channel.UNLIMITED)
     var allSent = unreadable.isEmpty()
+    var outcomesSeen = 0
     try {
         runBlocking {
             val scope = this
             var senderJob: Job? = null
             val outcomesJob = launch(start = CoroutineStart.UNDISPATCHED) {
                 fileSender.outcomes.take(files.size).collect { outcome ->
+                    outcomesSeen++
                     when (outcome) {
                         is TransferOutcome.Sent -> println("SENT ${oneLine(outcome.name)}")
                         is TransferOutcome.Failed -> {
@@ -185,6 +187,10 @@ private fun send(client: DroidDropClient, home: File, paths: List<String>) {
             }
             sessionJob.join()
             senderJob?.join()
+            if (outcomesSeen < files.size) {
+                println("CLOSED")
+                allSent = false
+            }
         }
     } catch (e: Exception) {
         println("ERROR ${oneLine(e.message ?: e.toString())}")
