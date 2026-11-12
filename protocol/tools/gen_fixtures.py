@@ -304,6 +304,10 @@ def sanitize():
         {"input": "  name.txt\u3000", "output": "name.txt"},
         {"input": "del\u007fete", "output": "del_ete"},
         {"input": "\U0001F600" * 60, "output": "\U0001F600" * 50},
+        {"input": "a" + "\U0001F600" * 60, "output": "a" + "\U0001F600" * 49},
+        {"input": "é" * 150 + ".txt", "output": "é" * 98 + ".txt"},
+        {"input": "c" * 190 + "." + "x" * 15, "output": "c" * 184 + "." + "x" * 15},
+        {"input": "c" * 190 + "." + "x" * 16, "output": "c" * 190 + "." + "x" * 9},
     ]}
 
 
