@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Network
 @testable import DroidDropKit
@@ -7,6 +8,11 @@ struct UnexpectedEvent: Error { let description: String }
 
 func temporaryDirectory() -> URL {
     FileManager.default.temporaryDirectory.appending(path: "droiddrop-tests-\(UUID().uuidString)")
+}
+
+/// Lowercase hex SHA-256 of `data`.
+func hex(_ data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
 }
 
 final class EventRecorder: @unchecked Sendable {
