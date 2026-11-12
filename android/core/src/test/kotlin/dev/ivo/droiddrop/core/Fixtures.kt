@@ -7,6 +7,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
+import java.security.MessageDigest
 import java.util.HexFormat
 
 object Fixtures {
@@ -22,3 +23,7 @@ fun JsonObject.strings(key: String): List<String> = getValue(key).jsonArray.map 
 
 fun String.hexToBytes(): ByteArray = HexFormat.of().parseHex(this)
 fun ByteArray.toHex(): String = HexFormat.of().formatHex(this)
+
+/** Lowercase hex SHA-256 of [data]. */
+fun sha(data: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(data).toHex()
+fun sha(text: String): String = sha(text.toByteArray())
