@@ -1,5 +1,6 @@
 import AppIntents
 import AppKit
+import UserNotifications
 // AppIntents is imported so metadata extraction sees the framework and stays quiet.
 
 @MainActor
@@ -9,7 +10,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         do {
-            let model = try AppModel()
+            // The delegate must be in place before any transfer can post a notification.
+            let notifier = TransferNotifier()
+            UNUserNotificationCenter.current().delegate = notifier
+            notifier.requestAuthorization()
+            let model = try AppModel(notifier: notifier)
             self.model = model
             statusMenu = StatusMenuController(model: model)
         } catch {

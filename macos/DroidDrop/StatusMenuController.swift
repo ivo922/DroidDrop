@@ -4,16 +4,26 @@ import DroidDropKit
 import ServiceManagement
 
 @MainActor
-final class StatusMenuController: NSObject, NSMenuDelegate {
+final class StatusMenuController: NSObject, NSMenuDelegate, NSMenuItemValidation {
     private let model: AppModel
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let pairingWindow: PairingWindowController
+    private let dropTarget: StatusDropTarget
     private var subscription: AnyCancellable?
+    private var transferSubscription: AnyCancellable?
+    /// A transfer shows at most an incoming and an outgoing line. Fixed slots let an open menu update live.
+    private let transferItems = [NSMenuItem(), NSMenuItem()]
+    private let cancelSendingItem = NSMenuItem()
 
     init(model: AppModel) {
         self.model = model
         pairingWindow = PairingWindowController(model: model)
+        dropTarget = StatusDropTarget(model: model)
         super.init()
+        cancelSendingItem.title = "Cancel Sending"
+        cancelSendingItem.action = #selector(cancelSending)
+        cancelSendingItem.target = self
+        dropTarget.install(on: statusItem.button?.window)
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
@@ -21,6 +31,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _, _, _ in
                 self?.updateIcon()
+            }
+        transferSubscription = Publishers.CombineLatest(model.$transferLines, model.$isSending)
+            .sink { [weak self] lines, isSending in
+                self?.showTransfers(lines, isSending: isSending)
             }
         updateIcon()
     }
@@ -31,6 +45,13 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         if let error = model.serverError { menu.addItem(disabled("Error: \(error)")) }
         if let error = model.unpairError { menu.addItem(disabled("Could not unpair: \(error)")) }
         if let access = ClipboardAccess.menuMessage(for: NSPasteboard.general.accessBehavior) { menu.addItem(disabled(access)) }
+        for transferItem in transferItems {
+            transferItem.isEnabled = false
+            menu.addItem(transferItem)
+        }
+        showTransfers(model.transferLines, isSending: model.isSending)
+        menu.addItem(item("Send Files…", #selector(sendFiles)))
+        menu.addItem(cancelSendingItem)
         menu.addItem(.separator())
 
         menu.addItem(item("Pair New Phone…", #selector(pair)))
@@ -61,6 +82,33 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(disabled("Mac code: \(model.macCode)"))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit DroidDrop", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+    }
+
+    /// Sending needs a connected phone (R6).
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        menuItem.action == #selector(sendFiles) ? model.canSendFiles : true
+    }
+
+    private func showTransfers(_ lines: [String], isSending: Bool) {
+        for (index, transferItem) in transferItems.enumerated() {
+            transferItem.title = index < lines.count ? lines[index] : ""
+            transferItem.isHidden = index >= lines.count
+        }
+        cancelSendingItem.isHidden = !isSending
+    }
+
+    @objc private func sendFiles() {
+        NSApp.activate()
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        guard panel.runModal() == .OK else { return }
+        model.sendFiles(panel.urls)
+    }
+
+    @objc private func cancelSending() {
+        model.cancelSending()
     }
 
     @objc private func pair() {

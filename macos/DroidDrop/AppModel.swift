@@ -21,13 +21,20 @@ final class AppModel: ObservableObject {
     @Published private(set) var noNetwork = false
     /// The paired phone that "Pair Again" replaces; nil for a new phone.
     @Published private(set) var replacingPeer: Peer?
+    /// Progress lines for the status menu; empty when no transfer is under way.
+    @Published private(set) var transferLines: [String] = []
+    /// A file is being sent or waiting for the phone.
+    @Published private(set) var isSending = false
 
     let macCode: String
     private let server: DroidDropServer?
     private var clipboard: ClipboardMonitor?
+    private var transfers: FileTransfers?
+    private let notifier: TransferNotifier
     private var wantsPairing = false
 
-    init() throws {
+    init(notifier: TransferNotifier) throws {
+        self.notifier = notifier
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appending(path: "DroidDrop")
         let identity = try IdentityStore(directory: support).loadOrCreate(commonName: "DroidDrop Mac")
@@ -48,6 +55,26 @@ final class AppModel: ObservableObject {
             configuration: .init(name: Self.serverName())
         )
         self.server = server
+        let transfers = FileTransfers(
+            server: server,
+            partials: PartialStore(directory: support.appending(path: "partials")),
+            destination: FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0].appending(path: "DroidDrop")
+        )
+        self.transfers = transfers
+        server.onMessage = { [weak transfers] peer, message in transfers?.receive(message, from: peer.fingerprint) }
+        transfers.onSnapshot = { [weak self] snapshot in
+            Task { @MainActor [weak self] in
+                self?.transferLines = snapshot.menuLines
+                self?.isSending = snapshot.outgoing != nil || snapshot.waitingToSend > 0
+            }
+        }
+        transfers.onOutcome = { [weak self] fingerprint, outcome in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let name = self.pairedPeers.first { $0.fingerprint == fingerprint }?.name ?? "your phone"
+                self.notifier.post(outcome, peerName: name)
+            }
+        }
         clipboard = ClipboardMonitor { [weak server] message in server?.broadcast(message) }
         server.onConnectedPeersChanged = { [weak self] peers in
             Task { @MainActor [weak self] in
@@ -116,6 +143,19 @@ final class AppModel: ObservableObject {
         openPairingIfPossible()
     }
 
+    /// Files go only to a connected phone (R6).
+    var canSendFiles: Bool { !connectedPeers.isEmpty }
+
+    func sendFiles(_ urls: [URL]) {
+        guard let peer = connectedPeers.first else { return }
+        transfers?.send(urls, to: peer.fingerprint)
+    }
+
+    /// Cancels the active file and drops the queue, including files waiting for a disconnected phone.
+    func cancelSending() {
+        for peer in pairedPeers { transfers?.cancelSending(to: peer.fingerprint) }
+    }
+
     func isConnected(_ peer: Peer) -> Bool {
         connectedPeers.contains { $0.fingerprint == peer.fingerprint }
     }
@@ -138,6 +178,7 @@ final class AppModel: ObservableObject {
         do {
             try server.unpair(fingerprint: fingerprint)
             unpairError = nil
+            transfers?.cancelSending(to: fingerprint)  // an unpaired phone's queued files must not linger
             refreshPeers()
             return nil
         } catch {
