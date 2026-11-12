@@ -39,6 +39,7 @@ object TransferNotifications {
             .setContentText(TransferText.waiting(pending, macName))
             .setOngoing(true)
             .setSilent(true)
+            .addAction(0, "Cancel", cancelIntent(context))
             .build()
         manager(context).notify(OUTGOING_ID, notification)
     }
@@ -68,16 +69,25 @@ object TransferNotifications {
     private fun showProgress(context: Context, id: Int, status: TransferStatus?) {
         if (status == null) return manager(context).cancel(id)
         val icon = if (status.direction == Direction.INCOMING) android.R.drawable.stat_sys_download else android.R.drawable.stat_sys_upload
-        val notification = base(context, icon)
+        val builder = base(context, icon)
             .setContentTitle("DroidDrop")
             .setContentText(TransferText.progress(status))
             .setProgress(status.size.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(), progressDone(status), false)
             .setOnlyAlertOnce(true)
             .setOngoing(true)
             .setSilent(true)
-            .build()
-        manager(context).notify(id, notification)
+        if (id == OUTGOING_ID) builder.addAction(0, "Cancel", cancelIntent(context))
+        manager(context).notify(id, builder.build())
     }
+
+    /** Explicit broadcast to [CancelSendingReceiver] (R10). */
+    private fun cancelIntent(context: Context): PendingIntent =
+        PendingIntent.getBroadcast(
+            context,
+            0,
+            Intent(context, CancelSendingReceiver::class.java),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
 
     /** setProgress takes Ints: scale down when the file is larger than 2 GiB. */
     private fun progressDone(status: TransferStatus): Int =

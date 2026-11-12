@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
@@ -63,6 +64,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // The picked URIs are granted to this activity, so they are opened here and not by the service (R9).
+    private val filePicker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) lifecycleScope.launch { OutgoingFiles.send(this@MainActivity, uris) }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = PairingStore(this)
@@ -87,6 +93,7 @@ class MainActivity : ComponentActivity() {
                     paired = paired,
                     phoneCode = phoneCode,
                     onPair = ::scanPairingCode,
+                    onSendFiles = { filePicker.launch(arrayOf("*/*")) },
                     onUnpair = ::unpair,
                     onAllowBackground = ::requestBatteryExemption,
                 )
@@ -173,6 +180,7 @@ private fun MainScreen(
     paired: Boolean,
     phoneCode: String,
     onPair: () -> Unit,
+    onSendFiles: () -> Unit,
     onUnpair: () -> Unit,
     onAllowBackground: () -> Unit,
 ) {
@@ -187,6 +195,7 @@ private fun MainScreen(
                 Button(onClick = onPair) { Text(if (paired) "Pair again" else "Pair with Mac") }
             }
             if (paired) {
+                Button(onClick = onSendFiles) { Text("Send files") }
                 OutlinedButton(onClick = onUnpair) { Text("Unpair") }
             }
             OutlinedButton(onClick = onAllowBackground) { Text("Allow running in background") }

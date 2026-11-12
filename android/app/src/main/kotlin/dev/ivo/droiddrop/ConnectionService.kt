@@ -68,6 +68,7 @@ class ConnectionService : Service() {
         downloads = DownloadsDestination(this)
         TransferNotifications.createChannel(this)
         scope.launch(Dispatchers.IO) { runCatching { partials.prune() } }
+        scope.launch(Dispatchers.IO) { runCatching { pruneOutgoingSpool() } }
         getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(networkCallback)
         scope.launch {
             ConnectionStatus.state.collect { state ->
@@ -273,6 +274,12 @@ class ConnectionService : Service() {
         { Transfers.received.tryEmit(it) },
     )
 
+    /** Deletes spooled copies of non-regular files (see OutgoingFiles.open) that a crash left behind. */
+    private fun pruneOutgoingSpool() {
+        val cutoff = System.currentTimeMillis() - OUTGOING_SPOOL_MAX_AGE_MILLIS
+        File(cacheDir, "outgoing").listFiles()?.filter { it.lastModified() < cutoff }?.forEach { it.delete() }
+    }
+
     private fun macName(): String = store.load()?.name ?: "Mac"
 
     private fun listener(
@@ -319,6 +326,7 @@ class ConnectionService : Service() {
         private const val INITIAL_BACKOFF_MILLIS = 1_000L
         private const val MAX_BACKOFF_MILLIS = 60_000L
         private const val PROGRESS_INTERVAL_MILLIS = 500L
+        private const val OUTGOING_SPOOL_MAX_AGE_MILLIS = 24 * 60 * 60 * 1_000L
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, ConnectionService::class.java))
