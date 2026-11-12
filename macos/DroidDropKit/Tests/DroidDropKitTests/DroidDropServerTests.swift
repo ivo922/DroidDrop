@@ -216,6 +216,95 @@ import Testing
         #expect(server.connectedPeers().isEmpty)
     }
 
+    // MARK: Sessions and chunks
+
+    @Test func reportsSessionStartAndEnd() async throws {
+        let log = Recorded<String>()
+        let (server, port) = try await makeServer { server in
+            server.onSessionStarted = { _ in log.append("start") }
+            server.onSessionEnded = { _ in log.append("end") }
+        }
+        defer { server.stop() }
+        let (connection, _) = try await pair(server, port: port)
+        try await eventually { log.values == ["start"] }
+
+        connection.cancel()
+        try await eventually { log.values == ["start", "end"] }
+    }
+
+    @Test func replacedSessionEndsBeforeNewOneStarts() async throws {
+        let log = Recorded<String>()
+        let (server, port) = try await makeServer { server in
+            server.onSessionStarted = { _ in log.append("start") }
+            server.onSessionEnded = { _ in log.append("end") }
+        }
+        defer { server.stop() }
+        _ = try await pair(server, port: port)
+        let (connection, events) = try await reconnect(server, port: port)
+        connection.send(.ping(id: 1))
+        #expect(try await events.nextMessage() == .pong(id: 1))
+        try await eventually { log.values.count >= 3 }
+        #expect(log.values == ["start", "end", "start"])
+    }
+
+    @Test func deliversChunksFromEstablishedSessions() async throws {
+        let chunks = Recorded<(Data, String, UInt64, Data)>()
+        let (server, port) = try await makeServer { server in
+            server.onChunk = { chunks.append(($0, $1, $2, $3)) }
+        }
+        defer { server.stop() }
+        let (connection, _) = try await pair(server, port: port)
+
+        let id = "0f8e2a4c-1b3d-4e5f-8a9b-0c1d2e3f4a5b"
+        connection.send(.chunk(transferId: id, offset: 7, data: Data([1, 2, 3])))
+        try await eventually { !chunks.values.isEmpty }
+        let chunk = try #require(chunks.values.first)
+        #expect(chunk.0 == phone.fingerprint)
+        #expect(chunk.1 == id)
+        #expect(chunk.2 == 7)
+        #expect(chunk.3 == Data([1, 2, 3]))
+    }
+
+    @Test func chunkBeforePairingClosesConnection() async throws {
+        let chunks = Recorded<String>()
+        let (server, port) = try await makeServer { server in
+            server.onChunk = { _, id, _, _ in chunks.append(id) }
+        }
+        defer { server.stop() }
+        let uri = server.openPairingWindow(hosts: ["127.0.0.1"])
+        let (connection, events) = try TestClient.connect(port: port, identity: phone, pinnedServer: uri.fingerprint)
+        #expect(try await events.nextMessage() == .hello(v: 1, name: "Test Mac", platform: .macos))
+        connection.send(.hello(v: 1, name: "Pixel", platform: .android))
+        connection.send(.chunk(transferId: "0f8e2a4c-1b3d-4e5f-8a9b-0c1d2e3f4a5b", offset: 0, data: Data([1])))
+
+        try await events.expectClosed()
+        #expect(chunks.values.isEmpty)
+        #expect(server.pairedPeers().isEmpty)
+    }
+
+    @Test func sendChunkReachesPhoneAndCompletes() async throws {
+        let (server, port) = try await makeServer()
+        defer { server.stop() }
+        let (_, events) = try await pair(server, port: port)
+
+        let id = "0f8e2a4c-1b3d-4e5f-8a9b-0c1d2e3f4a5b"
+        let results = Recorded<Bool>()
+        server.sendChunk(transferId: id, offset: 0, data: Data([9]), to: phone.fingerprint) { results.append($0) }
+        try await eventually { !results.values.isEmpty }
+        #expect(results.values == [true])
+        #expect(try await events.nextFrame() == .chunk(transferId: id, offset: 0, data: Data([9])))
+    }
+
+    @Test func sendChunkWithoutSessionFails() async throws {
+        let (server, _) = try await makeServer()
+        defer { server.stop() }
+        let results = Recorded<Bool>()
+        server.sendChunk(transferId: "0f8e2a4c-1b3d-4e5f-8a9b-0c1d2e3f4a5b", offset: 0, data: Data([9]),
+                         to: phone.fingerprint) { results.append($0) }
+        try await eventually { !results.values.isEmpty }
+        #expect(results.values == [false])
+    }
+
     @Test func peerStoreKeepsCorruptFileAndThrows() throws {
         let url = temporaryDirectory().appending(path: "peers.json")
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

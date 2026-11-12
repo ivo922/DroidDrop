@@ -63,6 +63,19 @@ public final class FramedConnection: @unchecked Sendable {
         write(frame)
     }
 
+    /// `completion(true)` once Network has processed the frame; false if the connection was closed first or the send failed.
+    /// Runs on the connection's queue. A send that fails closes the connection (reporting `.closed`) before `completion(false)`.
+    public func send(_ frame: Frame, completion: @escaping (Bool) -> Void) {
+        guard !isLocallyClosed else {
+            queue.async { completion(false) }
+            return
+        }
+        connection.send(content: FrameEncoder.encode(frame), completion: .contentProcessed { error in
+            if let error { self.fail(error) }
+            completion(error == nil)
+        })
+    }
+
     /// Sends everything queued so far plus `final`, then marks the stream complete. Inbound data is drained
     /// (not delivered) until the peer's EOF or `lingerTimeout`, then the connection is cancelled; cancelling
     /// earlier can reset the socket and lose the last frames. Network's TLS does not forward the half-close,

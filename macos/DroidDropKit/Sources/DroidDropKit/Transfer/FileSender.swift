@@ -1,7 +1,12 @@
 import Foundation
 import UniformTypeIdentifiers
 
-/// The session a FileSender writes to. Called on the sender's queue.
+/// The session a FileSender writes to. Called on the sender's queue. Implementations must:
+/// 1. Keep `send` and `sendChunk` in one FIFO order: `file_done` follows the last chunk while chunk completions
+///    are still outstanding, so it must never overtake an earlier chunk.
+/// 2. Make sure the sender's `disconnected()` is called (or already was) whenever a completion reports false;
+///    the sender ignores false completions and relies on that call.
+/// Implementations should not hold the sender strongly (the sender holds its link).
 public protocol TransferLink: AnyObject {
     func send(_ message: Message)
     /// `completion(true)` once the frame is handed to the network, false if the session is gone. Any thread.

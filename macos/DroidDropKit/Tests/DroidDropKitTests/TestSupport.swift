@@ -45,6 +45,20 @@ final class EventRecorder: @unchecked Sendable {
         }
     }
 
+    /// The next frame of either kind; skips `.ready`, throws on `.closed`.
+    func nextFrame() async throws -> Frame {
+        while true {
+            switch try await next() {
+            case .ready:
+                continue
+            case .frame(let frame):
+                return frame
+            case .closed(let error):
+                throw UnexpectedEvent(description: "closed: \(String(describing: error))")
+            }
+        }
+    }
+
     func expectClosed() async throws {
         while true {
             if case .closed = try await next() { return }
@@ -59,6 +73,23 @@ final class EventRecorder: @unchecked Sendable {
             case .closed: return
             }
         }
+    }
+}
+
+/// Values recorded from callbacks on other queues.
+final class Recorded<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [Value] = []
+    var values: [Value] { lock.withLock { stored } }
+    func append(_ value: Value) { lock.withLock { stored.append(value) } }
+}
+
+/// Polls `condition` every 10 ms until it holds; throws `TimeoutError` after `timeout`.
+func eventually(timeout: TimeInterval = 5, _ condition: () -> Bool) async throws {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !condition() {
+        guard Date() < deadline else { throw TimeoutError() }
+        try await Task.sleep(for: .milliseconds(10))
     }
 }
 

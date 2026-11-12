@@ -28,6 +28,12 @@ public final class DroidDropServer: @unchecked Sendable {
     public var onConnectedPeersChanged: (([Peer]) -> Void)?
     public var onPeerPaired: ((Peer) -> Void)?
     public var onMessage: ((Peer, Message) -> Void)?
+    /// An established (registered) session, keyed by peer fingerprint.
+    public var onSessionStarted: ((Data) -> Void)?
+    /// Also fired for a session replaced by a newer one, before the newer one's onSessionStarted.
+    public var onSessionEnded: ((Data) -> Void)?
+    /// Chunk from an established session: fingerprint, transferId, offset, data.
+    public var onChunk: ((Data, String, UInt64, Data) -> Void)?
 
     private let configuration: Configuration
     private let peers: PeerStore
@@ -183,6 +189,16 @@ public final class DroidDropServer: @unchecked Sendable {
         queue.async { [weak self] in self?.sessions[fingerprint]?.framed.send(message) }
     }
 
+    /// Sends a chunk to the established session of `fingerprint`; `completion(false)` when there is none. Safe from any thread.
+    /// Frames sent through `send(_:to:)` and here leave in call order. `completion` runs on `queue`.
+    public func sendChunk(transferId: String, offset: UInt64, data: Data, to fingerprint: Data,
+                          completion: @escaping @Sendable (Bool) -> Void) {
+        queue.async { [weak self] in
+            guard let session = self?.sessions[fingerprint] else { return completion(false) }
+            session.framed.send(.chunk(transferId: transferId, offset: offset, data: data), completion: completion)
+        }
+    }
+
     /// Sends to every established session. Dropped when there is none; nothing is queued for later sessions.
     public func broadcast(_ message: Message) {
         queue.async { [weak self] in self?.sessions.values.forEach { $0.framed.send(message) } }
@@ -225,7 +241,19 @@ public final class DroidDropServer: @unchecked Sendable {
 
     private func handle(_ frame: Frame, in session: Session) {
         session.lastReceived = ContinuousClock.now
-        guard case .control(let data) = frame else { return }
+        let data: Data
+        switch frame {
+        case let .chunk(transferId, offset, chunk):
+            // Only an established session may send chunks; before pairing only pair_request is allowed (SPEC §5 rule 3).
+            guard sessions[session.fingerprint] === session else {
+                session.framed.close()
+                return
+            }
+            onChunk?(session.fingerprint, transferId, offset, chunk)
+            return
+        case .control(let payload):
+            data = payload
+        }
         let message: Message
         do {
             message = try MessageCodec.decode(data)
@@ -271,15 +299,20 @@ public final class DroidDropServer: @unchecked Sendable {
     }
 
     private func register(_ session: Session) {
-        if let old = sessions[session.fingerprint], old !== session { old.framed.cancel() }
+        if let old = sessions[session.fingerprint], old !== session {
+            old.framed.cancel()
+            onSessionEnded?(session.fingerprint)
+        }
         sessions[session.fingerprint] = session
         onConnectedPeersChanged?(currentConnectedPeers())
+        onSessionStarted?(session.fingerprint)
     }
 
     private func unregister(_ session: Session) {
         guard sessions[session.fingerprint] === session else { return }
         sessions[session.fingerprint] = nil
         onConnectedPeersChanged?(currentConnectedPeers())
+        onSessionEnded?(session.fingerprint)
     }
 
     private func currentConnectedPeers() -> [Peer] {
