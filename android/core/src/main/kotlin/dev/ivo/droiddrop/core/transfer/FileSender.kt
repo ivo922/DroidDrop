@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -42,8 +44,9 @@ class OutgoingFile(val name: String, val mime: String, val channel: FileChannel,
 }
 
 /**
- * Outbound queue (SPEC §9). [enqueue] and [cancelAll] may be called from any thread; [run] drives one session at a
- * time. Chunks are written with blocking sends on [Dispatchers.IO], so the socket is the flow control (no window).
+ * Outbound queue (SPEC §9). [enqueue] and [cancelAll] may be called from any thread. [run] drives one session at a
+ * time, and the sender may outlive many sessions. Chunks are written with blocking sends on [Dispatchers.IO], so the
+ * socket is the flow control (no window).
  */
 class FileSender(private val newId: () -> String = { UUID.randomUUID().toString() }) {
     private class Item(val file: OutgoingFile) {
@@ -62,6 +65,12 @@ class FileSender(private val newId: () -> String = { UUID.randomUUID().toString(
     private val lock = Any()
     private val items = ArrayDeque<Item>() // guarded by lock; the head is the active file
     private var active: Item? = null // guarded by lock; the head while run is working on it
+
+    /**
+     * Held by [run] for its whole life. A cancelled run can keep going for a while (blocked writing a chunk or
+     * hashing), so the next session's run waits here until the old one has put the head back.
+     */
+    private val running = Mutex()
 
     /** Wakes [run] after [enqueue] or [cancelAll]. A stale signal only costs one extra check. */
     private val signal = Channel<Unit>(Channel.CONFLATED)
@@ -106,8 +115,15 @@ class FileSender(private val newId: () -> String = { UUID.randomUUID().toString(
      * Sends queued files over one established session until cancelled; waits for more when the queue is empty.
      * [replies] carries this session's file_accept / file_reject / file_result / file_cancel.
      * When cancelled (session ended), the unfinished head stays queued and unreleased (R4).
+     *
+     * One run at a time: a run started while an earlier one is still winding down after its cancellation (for
+     * example, blocked in a socket write or hashing) suspends, cancellably, until that one has finished.
      */
     suspend fun run(link: MessageSender, replies: ReceiveChannel<Message>) {
+        running.withLock { runSession(link, replies) }
+    }
+
+    private suspend fun runSession(link: MessageSender, replies: ReceiveChannel<Message>) {
         withContext(Dispatchers.IO) {
             while (true) {
                 val item = claimHead()

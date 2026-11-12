@@ -29,6 +29,7 @@ import java.io.IOException
 import java.io.RandomAccessFile
 import java.nio.channels.FileChannel
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -42,16 +43,25 @@ class FileSenderTest {
 
     /**
      * Records messages and chunks in send order. With a [chunkGate], each chunk send blocks until a permit is released;
-     * a send left waiting for 2 s fails like a dead socket, so a wrong sender cannot wedge the test.
+     * a send left waiting for 2 s fails like a socket closed at session end, so a wrong sender cannot wedge the test.
+     * With [events], control messages and gate timeouts are also logged as "<label> <what>", across links.
      */
-    class FakeLink(private val chunkGate: Semaphore? = null) : MessageSender {
+    class FakeLink(
+        private val chunkGate: Semaphore? = null,
+        private val events: MutableList<String>? = null,
+        private val label: String = "",
+    ) : MessageSender {
         private val sent = Channel<Any>(Channel.UNLIMITED)
         override fun send(message: Message) {
+            events?.add("$label ${message::class.simpleName}")
             sent.trySend(message)
         }
         override fun send(frame: Frame) {
             sent.trySend(frame)
-            if (chunkGate != null && !chunkGate.tryAcquire(2, TimeUnit.SECONDS)) throw IOException("chunk gate timed out")
+            if (chunkGate != null && !chunkGate.tryAcquire(2, TimeUnit.SECONDS)) {
+                events?.add("$label gate timed out")
+                throw IOException("chunk gate timed out")
+            }
         }
         suspend fun next(): Any = sent.receive()
         suspend fun chunk(): Frame.Chunk = next() as Frame.Chunk
@@ -177,6 +187,35 @@ class FileSenderTest {
         assertArrayEquals(data, chunks.map { it.data }.reduce(ByteArray::plus))
         assertTrue(outcomes.tryReceive().isFailure)
         assertEquals(0, released("big.bin"))
+    }
+
+    @Test fun nextRunWaitsForCancelledRunToWindDown() = sending {
+        val events = CopyOnWriteArrayList<String>()
+        val gated = FakeLink(Semaphore(0), events, "A")
+        sender.enqueue(listOf(outgoing("big.bin", sample(3 * mebibyte))))
+        val first = start(gated)
+        val offerA = gated.offer("big.bin")
+        reply(Message.FileAccept(offerA.transferId, 0))
+        gated.chunk() // run A is now blocked writing chunk 0, where cancellation cannot reach it
+        first.cancel() // the session ended; deliberately not joined
+        val link2 = FakeLink(events = events, label = "B")
+        val replies2 = Channel<Message>(Channel.UNLIMITED)
+        start(link2, replies2)
+        val offerB = link2.offer("big.bin")
+        // B offered only after A's blocked write failed (the socket closing) and A wound down.
+        assertEquals(listOf("A FileOffer", "A gate timed out", "B FileOffer"), events)
+        assertTrue(first.isCancelled)
+        assertNotEquals(offerA.transferId, offerB.transferId)
+        assertEquals(offerA.sha256, offerB.sha256) // A's digest was reused, not recomputed
+        assertEquals(0, released("big.bin"))
+        assertEquals(TransferStatus(Direction.OUTGOING, "big.bin", 0, 3L * mebibyte), sender.status.value)
+
+        sender.cancelAll()
+        assertEquals(Message.FileCancel(offerB.transferId), link2.next())
+        assertEquals(failed("big.bin", "cancelled"), outcomes.receive())
+        assertEquals(1, released("big.bin"))
+        assertTrue(outcomes.tryReceive().isFailure)
+        assertEquals(listOf("A FileOffer", "A gate timed out", "B FileOffer", "B FileCancel"), events)
     }
 
     @Test fun rejectAndFailedResultMoveToNextFile() = sending {
