@@ -14,10 +14,14 @@ import android.util.Log
 import dev.ivo.droiddrop.core.clipboard.ClipRules
 import dev.ivo.droiddrop.core.pairing.Base64Url
 import dev.ivo.droiddrop.core.pairing.PairUri
+import dev.ivo.droiddrop.core.protocol.Frame
 import dev.ivo.droiddrop.core.protocol.Message
 import dev.ivo.droiddrop.core.session.DroidDropClient
 import dev.ivo.droiddrop.core.session.MessageSender
 import dev.ivo.droiddrop.core.session.SessionListener
+import dev.ivo.droiddrop.core.transfer.FileReceiver
+import dev.ivo.droiddrop.core.transfer.PartialStore
+import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -27,7 +31,10 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -47,6 +54,8 @@ class ConnectionService : Service() {
     private lateinit var store: PairingStore
     private lateinit var locator: MacLocator
     private lateinit var clipboard: ClipboardWriter
+    private lateinit var partials: PartialStore
+    private lateinit var downloads: DownloadsDestination
     private var loop: Job? = null
 
     override fun onCreate() {
@@ -55,12 +64,31 @@ class ConnectionService : Service() {
         locator = MacLocator(this)
         clipboard = ClipboardWriter.forContext(this)
         Notifications.createChannel(this)
+        partials = PartialStore(File(cacheDir, "partials"))
+        downloads = DownloadsDestination(this)
+        TransferNotifications.createChannel(this)
+        scope.launch(Dispatchers.IO) { runCatching { partials.prune() } }
         getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(networkCallback)
         scope.launch {
             ConnectionStatus.state.collect { state ->
                 getSystemService(NotificationManager::class.java)
                     .notify(Notifications.ID, Notifications.build(this@ConnectionService, state))
             }
+        }
+        scope.launch {
+            combine(Transfers.incoming, Transfers.sender.status, Transfers.sender.pending) { incoming, outgoing, pending ->
+                Triple(incoming, outgoing, pending)
+            }.conflate().collect { (incoming, outgoing, pending) ->
+                TransferNotifications.showIncoming(this@ConnectionService, incoming)
+                TransferNotifications.showOutgoing(this@ConnectionService, outgoing, pending, macName())
+                delay(PROGRESS_INTERVAL_MILLIS) // at most two updates a second
+            }
+        }
+        scope.launch {
+            Transfers.received.collect { TransferNotifications.showOutcome(this@ConnectionService, it, macName()) }
+        }
+        scope.launch {
+            Transfers.sender.outcomes.collect { TransferNotifications.showOutcome(this@ConnectionService, it, macName()) }
         }
     }
 
@@ -98,6 +126,7 @@ class ConnectionService : Service() {
 
     override fun onDestroy() {
         scope.cancel()
+        TransferNotifications.cancelProgress(this)
         getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(networkCallback)
         super.onDestroy()
     }
@@ -113,8 +142,10 @@ class ConnectionService : Service() {
         var sawPinMismatch = false
         for (host in uri.hosts) {
             var paired = false
+            val transfers = newTransferSession()
             try {
                 client.run(host, uri.port, fingerprint, secret, listener(
+                    transfers,
                     onPaired = { name ->
                         store.save(PairedMac(name, uri.fingerprint, uri.hosts, uri.port))
                         store.rememberAddress(host, uri.port)
@@ -131,6 +162,8 @@ class ConnectionService : Service() {
                     Log.w(TAG, "pairing via $host failed", e)
                     lastError = e
                 }
+            } finally {
+                transfers.close()
             }
             if (paired) return true
         }
@@ -164,8 +197,10 @@ class ConnectionService : Service() {
             var pinMismatches = 0
             var otherFailures = 0
             for (endpoint in candidates) {
+                val transfers = newTransferSession()
                 try {
                     client.run(endpoint.host, endpoint.port, fingerprint, null, listener(
+                        transfers,
                         onConnected = {
                             connected = true
                             rejections.onConnected()
@@ -194,6 +229,8 @@ class ConnectionService : Service() {
                     } else {
                         Log.w(TAG, "session with $endpoint ended", e)
                     }
+                } finally {
+                    transfers.close()
                 }
                 if (connected) break
             }
@@ -227,16 +264,33 @@ class ConnectionService : Service() {
         }
     }
 
-    private fun listener(onPaired: (String) -> Unit = {}, onConnected: () -> Unit = {}) = object : SessionListener {
+    /** One per client.run. Always close it in a finally: that cancels the send job, which holds the sender's lock. */
+    private fun newTransferSession() = TransferSession(
+        scope,
+        FileReceiver(partials, downloads),
+        Transfers.sender,
+        { Transfers.incoming.value = it },
+        { Transfers.received.tryEmit(it) },
+    )
+
+    private fun macName(): String = store.load()?.name ?: "Mac"
+
+    private fun listener(
+        transfers: TransferSession,
+        onPaired: (String) -> Unit = {},
+        onConnected: () -> Unit = {},
+    ) = object : SessionListener {
         override fun onPaired(serverName: String) = onPaired(serverName)
 
         override fun onConnected(serverName: String, sender: MessageSender) {
             onConnected()
+            transfers.connected(sender)
             ConnectionStatus.state.value = ConnectionState.Connected(serverName)
         }
 
         // Runs on the session's IO thread and must not throw. Clip text is never logged.
         override fun onMessage(message: Message) {
+            if (transfers.handle(message)) return
             if (message !is Message.Clip) {
                 Log.d(TAG, "received $message")
                 return
@@ -250,6 +304,8 @@ class ConnectionService : Service() {
                 if (!clipboard.write(text)) Log.w(TAG, "could not apply clip ${message.id}")
             }
         }
+
+        override fun onChunk(chunk: Frame.Chunk) = transfers.chunk(chunk)
     }
 
     private fun deviceName(): String = ReconnectPolicy.deviceName(
@@ -262,6 +318,7 @@ class ConnectionService : Service() {
         private const val EXTRA_PAIR_URI = "pairUri"
         private const val INITIAL_BACKOFF_MILLIS = 1_000L
         private const val MAX_BACKOFF_MILLIS = 60_000L
+        private const val PROGRESS_INTERVAL_MILLIS = 500L
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, ConnectionService::class.java))
