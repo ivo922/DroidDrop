@@ -301,6 +301,9 @@ def sanitize():
         {"input": "a" * 250 + ".txt", "output": "a" * 196 + ".txt"},
         {"input": "é" * 150, "output": "é" * 100},
         {"input": "b" * 190 + "." + "x" * 20, "output": ("b" * 190 + "." + "x" * 20).encode()[:200].decode()},
+        {"input": "  name.txt\u3000", "output": "name.txt"},
+        {"input": "del\u007fete", "output": "del_ete"},
+        {"input": "\U0001F600" * 60, "output": "\U0001F600" * 50},
     ]}
 
 
