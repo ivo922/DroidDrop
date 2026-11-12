@@ -19,6 +19,8 @@ public final class FileSender: @unchecked Sendable {
     public static let chunkSize = FrameLimits.maxChunkData
     /// Chunks handed to the link whose completion has not arrived.
     public static let window = 4
+    /// Failure reason when the file cannot be hashed or read, or changed while sending. Same text as the Android sender.
+    public static let unreadable = "file changed or unreadable"
 
     public var onStatus: ((TransferStatus?) -> Void)?
     public var onOutcome: ((TransferOutcome) -> Void)?
@@ -157,8 +159,8 @@ public final class FileSender: @unchecked Sendable {
             items[0].digest = digest
             active?.size = digest.size
             offerHead()
-        case .failure(let error):
-            finishHead(.failed(.outgoing, name: items[0].name, reason: error.localizedDescription))
+        case .failure:
+            finishHead(.failed(.outgoing, name: items[0].name, reason: Self.unreadable))
         }
     }
 
@@ -233,7 +235,7 @@ public final class FileSender: @unchecked Sendable {
     /// Read failure or a short read: tell the peer and report the file failed.
     private func abortHead(id: String) {
         link?.send(.fileCancel(transferId: id))
-        finishHead(.failed(.outgoing, name: items[0].name, reason: "file changed or unreadable"))
+        finishHead(.failed(.outgoing, name: items[0].name, reason: Self.unreadable))
     }
 
     /// Ends the head file with `outcome`, then starts the next one if a session is up.

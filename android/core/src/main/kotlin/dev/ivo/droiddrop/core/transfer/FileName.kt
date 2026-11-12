@@ -13,7 +13,8 @@ object FileName {
                 appendCodePoint(if (forbidden) '_'.code else cp)
             }
         }
-        val stripped = replaced.trim().trimStart('.')
+        // NEL (U+0085) is not isWhitespace() on the JVM, but Swift trims it; trim it here too so both sides agree.
+        val stripped = replaced.trim { it.isWhitespace() || it == '\u0085' }.trimStart('.')
         if (stripped.isEmpty()) return "file"
         if (utf8Length(stripped) <= MAX_BYTES) return stripped
 

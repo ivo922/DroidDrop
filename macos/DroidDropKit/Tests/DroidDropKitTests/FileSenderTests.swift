@@ -266,10 +266,7 @@ final class OutcomeRecorder: @unchecked Sendable {
         let file = try write(Data("a".utf8), name: "a.txt")
         queue.sync { sender.enqueue([missing, file]); sender.connected(link) }
         _ = try await offerID(link, name: "a.txt")
-        guard case .failed(.outgoing, "gone.txt", let reason)? = outcomes.first else {
-            Issue.record("expected a failure for gone.txt, got \(outcomes)"); return
-        }
-        #expect(!reason.isEmpty)
+        #expect(outcomes.first == .failed(.outgoing, name: "gone.txt", reason: "file changed or unreadable"))
     }
 
     @Test func ignoresRepliesForOtherIds() async throws {

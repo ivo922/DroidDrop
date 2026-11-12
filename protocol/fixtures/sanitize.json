@@ -49,6 +49,10 @@
       "output": "name.txt"
     },
     {
+      "input": "name.txt",
+      "output": "name.txt"
+    },
+    {
       "input": "delete",
       "output": "del_ete"
     },
