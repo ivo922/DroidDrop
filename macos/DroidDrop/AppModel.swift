@@ -62,17 +62,26 @@ final class AppModel: ObservableObject {
         )
         self.transfers = transfers
         server.onMessage = { [weak transfers] peer, message in transfers?.receive(message, from: peer.fingerprint) }
+        // DispatchQueue.main keeps FIFO order (one Task per callback does not), so a stale progress snapshot can
+        // never land after the final idle one.
         transfers.onSnapshot = { [weak self] snapshot in
-            Task { @MainActor [weak self] in
-                self?.transferLines = snapshot.menuLines
-                self?.isSending = snapshot.outgoing != nil || snapshot.waitingToSend > 0
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    let lines = snapshot.menuLines
+                    let sending = snapshot.outgoing != nil || snapshot.waitingToSend > 0
+                    self.transferLines = lines
+                    self.isSending = sending
+                }
             }
         }
         transfers.onOutcome = { [weak self] fingerprint, outcome in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                let name = self.pairedPeers.first { $0.fingerprint == fingerprint }?.name ?? "your phone"
-                self.notifier.post(outcome, peerName: name)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    let name = self.pairedPeers.first { $0.fingerprint == fingerprint }?.name ?? "your phone"
+                    self.notifier.post(outcome, peerName: name)
+                }
             }
         }
         clipboard = ClipboardMonitor { [weak server] message in server?.broadcast(message) }
@@ -87,6 +96,10 @@ final class AppModel: ObservableObject {
         server.onPeerPaired = { [weak self] peer in
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                // "Pair Again" removed the old fingerprint (the server skips a replace by the same one): drop its queue.
+                if let replaced = self.replacingPeer?.fingerprint, replaced != peer.fingerprint {
+                    self.transfers?.cancelSending(to: replaced)
+                }
                 self.justPaired = peer
                 self.pairURI = nil
                 self.pairingExpiresAt = nil
@@ -153,7 +166,7 @@ final class AppModel: ObservableObject {
 
     /// Cancels the active file and drops the queue, including files waiting for a disconnected phone.
     func cancelSending() {
-        for peer in pairedPeers { transfers?.cancelSending(to: peer.fingerprint) }
+        transfers?.cancelAllSending()
     }
 
     func isConnected(_ peer: Peer) -> Bool {

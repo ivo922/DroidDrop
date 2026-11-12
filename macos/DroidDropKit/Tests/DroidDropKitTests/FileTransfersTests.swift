@@ -156,4 +156,18 @@ import Testing
         #expect(name == "note.txt")
         #expect(secondSha == sha256)
     }
+
+    /// "Pair Again" leaves a queue for a fingerprint that is no longer paired; cancelling must still clear it.
+    @Test func cancelAllSendingDropsQueuesOfUnpairedPeers() async throws {
+        let h = try await start()
+        defer { h.server.stop() }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appending(path: "note.txt")
+        try Data("abc".utf8).write(to: url)
+
+        h.transfers.send([url], to: Data(repeating: 7, count: 32))
+        try await eventually { h.snapshots.values.last?.waitingToSend == 1 }
+        h.transfers.cancelAllSending()
+        try await eventually { h.snapshots.values.last?.waitingToSend == 0 }
+    }
 }

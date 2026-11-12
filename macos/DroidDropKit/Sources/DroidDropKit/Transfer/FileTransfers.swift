@@ -80,6 +80,15 @@ public final class FileTransfers: @unchecked Sendable {
         }
     }
 
+    /// `cancelSending(to:)` for every peer with a sender, including fingerprints that are no longer paired. Any thread.
+    public func cancelAllSending() {
+        queue.async { [weak self] in
+            guard let self else { return }
+            for sender in self.senders.values { sender.cancelAll() }
+            self.publish()
+        }
+    }
+
     // MARK: - On queue
 
     private func sessionStarted(_ fingerprint: Data) {
