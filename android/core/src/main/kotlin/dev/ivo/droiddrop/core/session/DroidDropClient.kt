@@ -102,13 +102,21 @@ class DroidDropClient(
         }
     }
 
-    /** SPEC §5 rule 5: ping after [pingIdleMillis] without sending anything. */
+    /**
+     * SPEC §5 rule 5: ping after [pingIdleMillis] without sending anything. R14: also ping after [pingIdleMillis]
+     * without receiving anything when no ping went out in that time, so a long upload (which sends constantly and
+     * gets nothing back until `file_result`) still draws a pong before the receive timeout.
+     */
     private suspend fun CoroutineScope.keepalive(connection: Connection, session: ClientSession) {
         val idleNanos = pingIdleMillis * 1_000_000
+        // The confirmation ping went out just before the session was established.
+        var lastPingAtNanos = System.nanoTime()
         while (true) {
-            val idle = System.nanoTime() - connection.lastSentAtNanos
-            if (idle < idleNanos) {
-                delay((idleNanos - idle) / 1_000_000 + 1)
+            val now = System.nanoTime()
+            val untilSendIdle = idleNanos - (now - connection.lastSentAtNanos)
+            val untilReceiveIdle = maxOf(idleNanos - (now - connection.lastReceivedAtNanos), idleNanos - (now - lastPingAtNanos))
+            if (untilSendIdle > 0 && untilReceiveIdle > 0) {
+                delay(minOf(untilSendIdle, untilReceiveIdle) / 1_000_000 + 1)
                 continue
             }
             try {
@@ -117,6 +125,7 @@ class DroidDropClient(
                 ensureActive()
                 throw e
             }
+            lastPingAtNanos = System.nanoTime()
         }
     }
 }

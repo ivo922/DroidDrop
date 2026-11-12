@@ -28,11 +28,13 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.io.Closeable
+import java.io.IOException
 import java.net.InetAddress
 import java.net.SocketTimeoutException
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.SSLServerSocket
@@ -56,6 +58,7 @@ class DroidDropClientTest {
             socket.outputStream.flush()
         }
         fun receive(): Message = MessageCodec.decode((reader.read() as Frame.Control).json)
+        fun read(): Frame? = reader.read()
 
         /** Server hello, then answers the paired client's confirmation ping. */
         fun acceptPaired() {
@@ -243,6 +246,56 @@ class DroidDropClientTest {
             runBlocking { client(pingIdleMillis = 50).run("127.0.0.1", fake.port, mac.fingerprint, null, recorder) }
             fake.join()
             assertEquals(listOf("connected:Fake Mac", "message:${Message.Pong(1)}"), recorder.events)
+        }
+    }
+
+    @Test
+    fun pingsWhileOnlySending() {
+        val controls = CopyOnWriteArrayList<Message>()
+        val sessionOver = AtomicBoolean(false)
+        val sendFailure = AtomicReference<Throwable?>()
+        val chunker = AtomicReference<Thread?>()
+        FakeMac(mac) { peer ->
+            peer.acceptPaired()
+            val deadline = System.nanoTime() + 1_500_000_000L
+            while (System.nanoTime() < deadline) {
+                val frame = peer.read() ?: break
+                if (frame !is Frame.Control) continue
+                val message = MessageCodec.decode(frame.json)
+                controls += message
+                if (message is Message.Ping) {
+                    peer.send(Message.Pong(message.id))
+                    break
+                }
+            }
+            peer.finish()
+        }.use { fake ->
+            val listener = object : SessionListener {
+                override fun onConnected(serverName: String, sender: MessageSender) {
+                    chunker.set(thread {
+                        try {
+                            while (!sessionOver.get()) {
+                                sender.send(chunk)
+                                Thread.sleep(50)
+                            }
+                        } catch (_: IOException) {
+                            // The session ended under us.
+                        } catch (t: Throwable) {
+                            sendFailure.set(t)
+                        }
+                    })
+                }
+            }
+            try {
+                runBlocking { client(pingIdleMillis = 300).run("127.0.0.1", fake.port, mac.fingerprint, null, listener) }
+            } finally {
+                sessionOver.set(true)
+                chunker.get()?.join(5_000)
+            }
+            fake.join()
+            assertFalse(chunker.get()?.isAlive ?: false, "chunk sender thread did not stop")
+            assertEquals(null, sendFailure.get())
+            assertTrue(controls.any { it is Message.Ping && it.id >= 1 }, "no keepalive ping while only sending: $controls")
         }
     }
 
