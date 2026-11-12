@@ -26,6 +26,9 @@ sealed interface TransferOutcome {
 fun interface Destination {
     /** Moves or copies a verified [file] into place as [name] (already sanitized). Returns where it went. May throw anything. */
     fun save(file: File, name: String): String
+
+    /** Whether a location that [save] returned still exists. The default reads it as a file path. May throw. */
+    fun exists(location: String): Boolean = File(location).isFile
 }
 
 /** Saves into a plain directory with [FileName.unique]; returns the absolute path. For devcli and tests. */

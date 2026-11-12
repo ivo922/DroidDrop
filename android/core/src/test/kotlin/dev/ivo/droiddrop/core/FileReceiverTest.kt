@@ -30,7 +30,8 @@ class FileReceiverTest {
 
     private fun sample(count: Int = 3_000_000) = ByteArray(count) { (it % 251).toByte() }
 
-    private fun partialCount() = File(tmp, "partials").list()?.size ?: 0
+    private fun partialCount() = File(tmp, "partials").list()?.count { it.endsWith(".part") } ?: 0
+    private fun completionMarkers() = File(tmp, "partials").listFiles()?.filter { it.name.endsWith(".done") }.orEmpty()
     private fun destinationCount() = dest.list()?.size ?: 0
 
     private fun offer(id: String, name: String, data: ByteArray, hash: String = sha(data), to: FileReceiver = receiver) =
@@ -59,6 +60,7 @@ class FileReceiverTest {
         assertArrayEquals(data, saved.readBytes())
         assertNull(receiver.status)
         assertEquals(0, partialCount())
+        assertEquals(listOf("${sha(data)}-3000000.done"), completionMarkers().map { it.name })
     }
 
     @Test fun emptyFile() {
@@ -191,5 +193,48 @@ class FileReceiverTest {
         assertEquals(Message.FileResult(id1, false, "save_failed"), reply)
         assertEquals(TransferOutcome.Failed(Direction.INCOMING, "hello.txt", "save_failed"), outcome)
         assertEquals(0L, partials.resumeOffset(sha("hello"), 5))
+    }
+
+    @Test fun completedTransferIsNotSavedTwice() {
+        val data = sample(100)
+        val first = receive("photo.jpg", data)
+        val second = makeReceiver()
+        assertEquals(Message.FileAccept(id2, data.size.toLong()), offer(id2, "photo.jpg", data, to = second))
+        assertNull(second.status)
+        assertNull(chunk(id2, 0, data, to = second))
+        val (reply, outcome) = second.done(Message.FileDone(id2))!!
+        assertEquals(Message.FileResult(id2, true), reply)
+        assertEquals(first, outcome)
+        assertEquals(1, destinationCount())
+        assertEquals(0, partialCount())
+    }
+
+    @Test fun staleCompletionMarkerIsIgnored() {
+        val data = sample(100)
+        receive("photo.jpg", data)
+        val marker = completionMarkers().single()
+        assertTrue(marker.setLastModified(System.currentTimeMillis() - 11 * 60_000L))
+        val second = makeReceiver()
+        assertEquals(Message.FileAccept(id2, 0), offer(id2, "photo.jpg", data, to = second))
+        assertNull(chunk(id2, 0, data, to = second))
+        val (reply, outcome) = second.done(Message.FileDone(id2))!!
+        assertEquals(Message.FileResult(id2, true), reply)
+        assertEquals(TransferOutcome.Received("photo.jpg", File(dest, "photo (1).jpg").absolutePath), outcome)
+        assertArrayEquals(data, File(dest, "photo (1).jpg").readBytes())
+    }
+
+    @Test fun completionMarkerIgnoredWhenSavedFileDeleted() {
+        val data = sample(100)
+        receive("photo.jpg", data)
+        assertEquals(1, completionMarkers().size)
+        assertTrue(File(dest, "photo.jpg").delete())
+        val second = makeReceiver()
+        assertEquals(Message.FileAccept(id2, 0), offer(id2, "photo.jpg", data, to = second))
+        assertNull(chunk(id2, 0, data, to = second))
+        val (reply, outcome) = second.done(Message.FileDone(id2))!!
+        assertEquals(Message.FileResult(id2, true), reply)
+        assertEquals(TransferOutcome.Received("photo.jpg", File(dest, "photo.jpg").absolutePath), outcome)
+        assertArrayEquals(data, File(dest, "photo.jpg").readBytes())
+        assertEquals(1, destinationCount())
     }
 }

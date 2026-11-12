@@ -41,4 +41,16 @@ class PartialStoreTest {
         assertFalse(old.exists())
         assertTrue(recent.exists())
     }
+
+    @Test fun pruneDeletesExpiredCompletionMarkers() {
+        val store = makeStore()
+        val now = System.currentTimeMillis()
+        val old = File(store.directory, "$sha-1.done").apply { writeText("/old") }
+        val recent = File(store.directory, "$sha-2.done").apply { writeText("/recent") }
+        assertTrue(old.setLastModified(now - 11 * 60_000L))
+        assertTrue(recent.setLastModified(now - 9 * 60_000L))
+        store.prune(now)
+        assertFalse(old.exists())
+        assertTrue(recent.exists())
+    }
 }

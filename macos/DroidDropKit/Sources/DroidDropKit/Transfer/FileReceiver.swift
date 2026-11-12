@@ -15,6 +15,8 @@ public final class FileReceiver {
     private let partials: PartialStore
     private let destination: URL
     private var active: Active?
+    /// A re-offer of a file already saved, whose `file_result` was lost: accepted at its end, answered from the marker.
+    private var completed: (transferId: String, saved: URL)?
 
     public init(partials: PartialStore, destination: URL) {
         self.partials = partials
@@ -27,8 +29,13 @@ public final class FileReceiver {
     }
 
     /// `file_accept` at the resume offset, or `file_reject{reason: "cannot_write"}`. Supersedes an active transfer (R2).
+    /// A file saved less than `PartialStore.completionMaxAge` ago that still exists is accepted at its size.
     public func offer(transferId: String, name: String, size: Int, sha256: String) -> Message {
         close()
+        if let saved = partials.completedLocation(sha256: sha256, size: size) {
+            completed = (transferId, saved)
+            return .fileAccept(transferId: transferId, offset: size)
+        }
         let fileManager = FileManager.default
         let partial = partials.url(sha256: sha256, size: size)
         do {
@@ -64,6 +71,11 @@ public final class FileReceiver {
 
     /// `file_result` plus the outcome; nil when `transferId` is not active.
     public func done(transferId: String) -> (reply: Message, outcome: TransferOutcome)? {
+        if let completed, completed.transferId == transferId {
+            self.completed = nil
+            return (.fileResult(transferId: transferId, ok: true, reason: nil),
+                    .received(name: completed.saved.lastPathComponent, url: completed.saved))
+        }
         guard let current = active, current.transferId == transferId else { return nil }
         active = nil
         try? current.handle.close()
@@ -85,6 +97,7 @@ public final class FileReceiver {
             let name = FileName.unique(current.name) { fileManager.fileExists(atPath: destination.appending(path: $0).path) }
             let saved = destination.appending(path: name)
             try fileManager.moveItem(at: current.partial, to: saved)
+            partials.markCompleted(sha256: current.sha256, size: current.size, location: saved)
             return (.fileResult(transferId: transferId, ok: true, reason: nil), .received(name: name, url: saved))
         } catch {
             return failure("save_failed")
@@ -93,7 +106,7 @@ public final class FileReceiver {
 
     /// The peer's `file_cancel`: stops the transfer, keeps the partial.
     public func cancel(transferId: String) {
-        guard active?.transferId == transferId else { return }
+        guard active?.transferId == transferId || completed?.transferId == transferId else { return }
         close()
     }
 
@@ -101,6 +114,7 @@ public final class FileReceiver {
     public func close() {
         try? active?.handle.close()
         active = nil
+        completed = nil
     }
 
     /// Ends the active transfer with `file_cancel`, discarding the partial (R3).

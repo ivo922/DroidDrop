@@ -20,16 +20,27 @@ class FileReceiver(private val partials: PartialStore, private val destination: 
         var received: Long,
     )
 
+    /** A re-offer of a file already saved, whose `file_result` was lost: accepted at its end, answered from the marker. */
+    private class Completed(val transferId: String, val name: String, val location: String)
+
     private var active: Active? = null
+    private var completed: Completed? = null
 
     /** The transfer in progress (sanitized name), or null. */
     @Volatile
     var status: TransferStatus? = null
         private set
 
-    /** `file_accept` at the resume offset, or `file_reject{reason: "cannot_write"}`. Supersedes an active transfer (R2). */
+    /**
+     * `file_accept` at the resume offset, or `file_reject{reason: "cannot_write"}`. Supersedes an active transfer (R2).
+     * A file saved less than [PartialStore.COMPLETION_MAX_AGE_MILLIS] ago that still exists is accepted at its size.
+     */
     fun offer(offer: Message.FileOffer): Message {
         close()
+        partials.completedLocation(offer.sha256, offer.size, destination::exists)?.let { location ->
+            completed = Completed(offer.transferId, FileName.sanitize(offer.name), location)
+            return Message.FileAccept(offer.transferId, offer.size)
+        }
         val partial = partials.file(offer.sha256, offer.size)
         return try {
             Files.createDirectories(partials.directory.toPath())
@@ -64,6 +75,10 @@ class FileReceiver(private val partials: PartialStore, private val destination: 
 
     /** `file_result` plus the outcome; null when the transfer is not active. */
     fun done(done: Message.FileDone): Pair<Message, TransferOutcome>? {
+        completed?.takeIf { it.transferId == done.transferId }?.let {
+            completed = null
+            return Message.FileResult(it.transferId, true) to TransferOutcome.Received(it.name, it.location)
+        }
         val current = active?.takeIf { it.transferId == done.transferId } ?: return null
         active = null
         status = null
@@ -89,19 +104,21 @@ class FileReceiver(private val partials: PartialStore, private val destination: 
         } catch (e: Exception) {
             return failure("save_failed")
         }
+        partials.markCompleted(current.sha256, current.size, location)
         current.partial.delete() // a copying destination leaves it behind
         return Message.FileResult(current.transferId, true) to TransferOutcome.Received(current.name, location)
     }
 
     /** The peer's `file_cancel`: stops the transfer, keeps the partial. */
     fun cancel(transferId: String) {
-        if (active?.transferId == transferId) close()
+        if (active?.transferId == transferId || completed?.transferId == transferId) close()
     }
 
     /** Session ended: closes the partial file and keeps it (R4). */
     fun close() {
         active?.let { runCatching { it.channel.close() } }
         active = null
+        completed = null
         status = null
     }
 

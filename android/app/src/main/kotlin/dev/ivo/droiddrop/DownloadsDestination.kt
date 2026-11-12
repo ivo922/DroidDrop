@@ -2,6 +2,7 @@ package dev.ivo.droiddrop
 
 import android.content.ContentValues
 import android.content.Context
+import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
 import android.webkit.MimeTypeMap
@@ -34,6 +35,14 @@ class DownloadsDestination(private val context: Context) : Destination {
         }
         file.delete()
         return uri.toString()
+    }
+
+    /** Whether the MediaStore row [location] (a uri [save] returned) is still there. False on any failure. */
+    override fun exists(location: String): Boolean = try {
+        context.contentResolver.query(Uri.parse(location), arrayOf(MediaStore.MediaColumns._ID), null, null, null)
+            ?.use { it.moveToFirst() } ?: false
+    } catch (e: Exception) {
+        false
     }
 
     /**

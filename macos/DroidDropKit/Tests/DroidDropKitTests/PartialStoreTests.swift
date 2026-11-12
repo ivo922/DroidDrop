@@ -40,4 +40,18 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: old.path))
         #expect(FileManager.default.fileExists(atPath: recent.path))
     }
+
+    @Test func pruneDeletesExpiredCompletionMarkers() throws {
+        let store = try makeStore()
+        let now = Date()
+        let old = store.directory.appending(path: "\(sha)-1.done")
+        let recent = store.directory.appending(path: "\(sha)-2.done")
+        try Data("/old".utf8).write(to: old)
+        try Data("/recent".utf8).write(to: recent)
+        try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-11 * 60)], ofItemAtPath: old.path)
+        try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-9 * 60)], ofItemAtPath: recent.path)
+        store.prune(now: now)
+        #expect(!FileManager.default.fileExists(atPath: old.path))
+        #expect(FileManager.default.fileExists(atPath: recent.path))
+    }
 }

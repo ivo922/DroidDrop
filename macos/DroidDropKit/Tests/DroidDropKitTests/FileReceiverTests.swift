@@ -17,8 +17,16 @@ import Testing
         Data((0..<count).map { UInt8($0 % 251) })
     }
 
+    private func partialFiles(_ root: URL) -> [String] {
+        (try? FileManager.default.contentsOfDirectory(atPath: root.appending(path: "partials").path)) ?? []
+    }
+
     private func partialCount(_ root: URL) -> Int {
-        (try? FileManager.default.contentsOfDirectory(atPath: root.appending(path: "partials").path).count) ?? 0
+        partialFiles(root).filter { $0.hasSuffix(".part") }.count
+    }
+
+    private func completionMarkers(_ root: URL) -> [URL] {
+        partialFiles(root).filter { $0.hasSuffix(".done") }.map { root.appending(path: "partials/\($0)") }
     }
 
     private func destinationCount(_ root: URL) -> Int {
@@ -45,7 +53,7 @@ import Testing
         #expect(outcome == .received(name: "photo.jpg", url: saved))
         #expect(try Data(contentsOf: saved) == data)
         #expect(receiver.status == nil)
-        #expect(try FileManager.default.contentsOfDirectory(atPath: root.appending(path: "partials").path).isEmpty)
+        #expect(partialFiles(root) == ["\(hex(data))-3000000.done"])
     }
 
     @Test func emptyFile() throws {
@@ -184,5 +192,53 @@ import Testing
         let data = sample(10)
         #expect(receiver.offer(transferId: id1, name: "a.bin", size: 10, sha256: hex(data)) == .fileReject(transferId: id1, reason: "cannot_write"))
         #expect(receiver.status == nil)
+    }
+
+    @Test func completedTransferIsNotSavedTwice() throws {
+        let (first, root) = makeReceiver()
+        let data = sample(100)
+        let firstOutcome = try receive("photo.jpg", data, with: first)
+        let (second, _) = makeReceiver(in: root)
+        #expect(second.offer(transferId: id2, name: "photo.jpg", size: data.count, sha256: hex(data)) == .fileAccept(transferId: id2, offset: data.count))
+        #expect(second.status == nil)
+        #expect(second.chunk(transferId: id2, offset: 0, data: data) == nil)
+        let (reply, outcome) = try #require(second.done(transferId: id2))
+        #expect(reply == .fileResult(transferId: id2, ok: true, reason: nil))
+        #expect(outcome == firstOutcome)
+        #expect(destinationCount(root) == 1)
+        #expect(partialCount(root) == 0)
+    }
+
+    @Test func staleCompletionMarkerIsIgnored() throws {
+        let (first, root) = makeReceiver()
+        let data = sample(100)
+        _ = try receive("photo.jpg", data, with: first)
+        let marker = try #require(completionMarkers(root).first)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-11 * 60)], ofItemAtPath: marker.path)
+        let (second, _) = makeReceiver(in: root)
+        #expect(second.offer(transferId: id2, name: "photo.jpg", size: data.count, sha256: hex(data)) == .fileAccept(transferId: id2, offset: 0))
+        #expect(second.chunk(transferId: id2, offset: 0, data: data) == nil)
+        let (reply, outcome) = try #require(second.done(transferId: id2))
+        #expect(reply == .fileResult(transferId: id2, ok: true, reason: nil))
+        let saved = root.appending(path: "Downloads/DroidDrop/photo (1).jpg")
+        #expect(outcome == .received(name: "photo (1).jpg", url: saved))
+        #expect(try Data(contentsOf: saved) == data)
+    }
+
+    @Test func completionMarkerIgnoredWhenSavedFileDeleted() throws {
+        let (first, root) = makeReceiver()
+        let data = sample(100)
+        _ = try receive("photo.jpg", data, with: first)
+        #expect(completionMarkers(root).count == 1)
+        let saved = root.appending(path: "Downloads/DroidDrop/photo.jpg")
+        try FileManager.default.removeItem(at: saved)
+        let (second, _) = makeReceiver(in: root)
+        #expect(second.offer(transferId: id2, name: "photo.jpg", size: data.count, sha256: hex(data)) == .fileAccept(transferId: id2, offset: 0))
+        #expect(second.chunk(transferId: id2, offset: 0, data: data) == nil)
+        let (reply, outcome) = try #require(second.done(transferId: id2))
+        #expect(reply == .fileResult(transferId: id2, ok: true, reason: nil))
+        #expect(outcome == .received(name: "photo.jpg", url: saved))
+        #expect(try Data(contentsOf: saved) == data)
+        #expect(destinationCount(root) == 1)
     }
 }
