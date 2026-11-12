@@ -6,6 +6,7 @@ import dev.ivo.droiddrop.core.session.MessageSender
 import dev.ivo.droiddrop.core.transfer.DirectoryDestination
 import dev.ivo.droiddrop.core.transfer.FileReceiver
 import dev.ivo.droiddrop.core.transfer.FileSender
+import dev.ivo.droiddrop.core.transfer.OutgoingFile
 import dev.ivo.droiddrop.core.transfer.PartialStore
 import dev.ivo.droiddrop.core.transfer.TransferOutcome
 import dev.ivo.droiddrop.core.transfer.TransferStatus
@@ -22,9 +23,12 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.io.IOException
+import java.nio.channels.FileChannel
 import java.security.MessageDigest
 import java.util.HexFormat
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 
 class TransferSessionTest {
     @TempDir
@@ -35,7 +39,7 @@ class TransferSessionTest {
     private val outcomes = CopyOnWriteArrayList<TransferOutcome>()
     private val id = "11111111-2222-3333-4444-555555555555"
 
-    private class FakeLink(private val failure: IOException? = null) : MessageSender {
+    private class FakeLink(private val failure: Exception? = null) : MessageSender {
         val messages = CopyOnWriteArrayList<Message>()
 
         override fun send(message: Message) {
@@ -51,14 +55,17 @@ class TransferSessionTest {
     private lateinit var partials: PartialStore
     private lateinit var session: TransferSession
 
-    private fun newSession(): TransferSession {
+    private val sendFailures = LinkedBlockingQueue<Throwable>()
+
+    private fun newSession(sender: FileSender = FileSender()): TransferSession {
         partials = PartialStore(File(dir, "partials"))
         return TransferSession(
             scope,
             FileReceiver(partials, DirectoryDestination(File(dir, "out"))),
-            FileSender(),
+            sender,
             { incoming += it },
             { outcomes += it },
+            { sendFailures += it },
         ).also { session = it }
     }
 
@@ -111,5 +118,15 @@ class TransferSessionTest {
 
         assertNull(incoming.last())
         assertEquals(5L, partials.file(sha(bytes), 10).length())
+    }
+
+    @Test
+    fun unexpectedSendFailureIsReportedNotThrown() {
+        val file = File(dir, "a.txt").apply { writeText("a") }
+        val sender = FileSender().apply { enqueue(listOf(OutgoingFile("a.txt", "text/plain", FileChannel.open(file.toPath())))) }
+        newSession(sender).connected(FakeLink(IllegalStateException("not an IOException")))
+
+        val failure = sendFailures.poll(5, TimeUnit.SECONDS)
+        assertTrue(failure is IllegalStateException, "got $failure")
     }
 }

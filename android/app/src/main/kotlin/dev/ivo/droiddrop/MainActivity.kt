@@ -164,6 +164,7 @@ class MainActivity : ComponentActivity() {
 
     private fun unpair() {
         ConnectionService.stop(this)
+        Transfers.sender.cancelAll() // the next pairing, maybe with another Mac, must not get this queue
         store.clear()
         ConnectionStatus.state.value = ConnectionState.Unpaired
         AndroidIdentity.enqueueDelete()

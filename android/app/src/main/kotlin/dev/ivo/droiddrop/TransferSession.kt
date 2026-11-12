@@ -1,5 +1,6 @@
 package dev.ivo.droiddrop
 
+import android.util.Log
 import dev.ivo.droiddrop.core.protocol.Frame
 import dev.ivo.droiddrop.core.protocol.Message
 import dev.ivo.droiddrop.core.session.MessageSender
@@ -7,6 +8,7 @@ import dev.ivo.droiddrop.core.transfer.FileReceiver
 import dev.ivo.droiddrop.core.transfer.FileSender
 import dev.ivo.droiddrop.core.transfer.TransferOutcome
 import dev.ivo.droiddrop.core.transfer.TransferStatus
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -24,6 +26,8 @@ class TransferSession(
     private val sender: FileSender,
     private val onIncoming: (TransferStatus?) -> Unit,
     private val onOutcome: (TransferOutcome) -> Unit,
+    /** A send job that died of anything but cancellation. Logged rather than crashing the process. */
+    private val onSendFailure: (Throwable) -> Unit = { Log.e(TAG, "file sender stopped", it) },
 ) {
     @Volatile private var link: MessageSender? = null
     private val replies = Channel<Message>(Channel.UNLIMITED)
@@ -32,7 +36,15 @@ class TransferSession(
     /** Starts sender.run(link, replies) on Dispatchers.IO in [scope]. */
     fun connected(link: MessageSender) {
         this.link = link
-        sendJob = scope.launch(Dispatchers.IO) { sender.run(link, replies) }
+        sendJob = scope.launch(Dispatchers.IO) {
+            try {
+                sender.run(link, replies)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                onSendFailure(e) // the scope has no handler: an escaping throwable would crash the process
+            }
+        }
     }
 
     /** True when [message] is a file message (handled here). */
@@ -91,5 +103,9 @@ class TransferSession(
         } catch (_: Exception) {
             // Dropped on purpose; see above.
         }
+    }
+
+    private companion object {
+        const val TAG = "TransferSession"
     }
 }

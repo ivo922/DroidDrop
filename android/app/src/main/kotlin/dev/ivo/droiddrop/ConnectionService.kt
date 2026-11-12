@@ -251,11 +251,13 @@ class ConnectionService : Service() {
     }
 
     /**
-     * Clears the paired Mac and deletes the keystore identity so the next pair presents a new fingerprint.
+     * Drops the outgoing queue, clears the paired Mac and deletes the keystore identity so the next pair presents a
+     * new fingerprint.
      * Runs to completion even when the service scope is cancelling.
      */
     private suspend fun forgetPairing(message: String) {
         withContext(NonCancellable) {
+            Transfers.sender.cancelAll() // the queue was for the Mac being forgotten
             store.clear()
             withContext(Dispatchers.IO) {
                 runCatching { AndroidIdentity.delete() }.onFailure { Log.e(TAG, "identity delete failed", it) }

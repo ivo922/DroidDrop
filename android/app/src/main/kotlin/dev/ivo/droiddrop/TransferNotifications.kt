@@ -20,6 +20,7 @@ object TransferNotifications {
     private const val RECEIVED_ID = 4 // replaced by the next success (R12)
     private const val SENT_ID = 5
     private const val FIRST_FAILURE_ID = 100
+    private const val PROGRESS_MAX = 1000
 
     private val nextFailureId = AtomicInteger(FIRST_FAILURE_ID)
 
@@ -72,7 +73,7 @@ object TransferNotifications {
         val builder = base(context, icon)
             .setContentTitle("DroidDrop")
             .setContentText(TransferText.progress(status))
-            .setProgress(status.size.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(), progressDone(status), false)
+            .setProgress(PROGRESS_MAX, progressDone(status), false)
             .setOnlyAlertOnce(true)
             .setOngoing(true)
             .setSilent(true)
@@ -89,9 +90,9 @@ object TransferNotifications {
             PendingIntent.FLAG_IMMUTABLE,
         )
 
-    /** setProgress takes Ints: scale down when the file is larger than 2 GiB. */
+    /** Progress in thousandths: setProgress takes Ints, and bytesDone * 1000 cannot overflow a Long for any real file. */
     private fun progressDone(status: TransferStatus): Int =
-        if (status.size <= Int.MAX_VALUE) status.bytesDone.toInt() else (status.bytesDone * Int.MAX_VALUE / status.size).toInt()
+        if (status.size > 0) (status.bytesDone * PROGRESS_MAX / status.size).toInt() else 0
 
     private fun base(context: Context, icon: Int): NotificationCompat.Builder =
         NotificationCompat.Builder(context, CHANNEL)
