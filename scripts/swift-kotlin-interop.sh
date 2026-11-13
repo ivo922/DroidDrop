@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pair Kotlin devcli with the Swift droiddrop-server, connect --ping, then round-trip a file each way.
+# Pair Kotlin devcli with the Swift droiddrop-server, connect --ping, round-trip a file each way, then send a clip.
 # Builds first, then starts the server with stdin on a FIFO (fd 3) so this script can type commands.
 # The server stays up after stdin EOF, so this script kills it.
 set -euo pipefail
@@ -184,4 +184,19 @@ if ! grep -qxF "RECEIVED $WORK/down/down.bin" "$WORK/receive.out"; then
 fi
 cmp "$WORK/down.bin" "$WORK/down/down.bin"
 echo "down.bin matches"
+
+echo "== devcli clip (phone to Mac) =="
+clip_out="$("$DEVCLI" clip 'héllo from devcli')"
+printf '%s\n' "$clip_out"
+expected=$'CONNECTED droiddrop-server\nSENT'
+if [[ "$clip_out" != "$expected" ]]; then
+    echo "unexpected clip output" >&2
+    exit 1
+fi
+wait_for_log '^MESSAGE devcli .*"type":"clip"'
+if ! grep -E '^MESSAGE devcli .*"type":"clip"' "$WORK/server.log" | grep -qF '"text":"héllo from devcli"'; then
+    echo "server did not receive the clip text" >&2
+    exit 1
+fi
+echo "clip received"
 echo "INTEROP OK"
