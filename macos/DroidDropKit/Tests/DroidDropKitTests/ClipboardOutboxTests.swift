@@ -74,4 +74,21 @@ import Testing
         #expect(outbox.poll(changeCount: 1) { plain("from phone") } == nil)
         #expect(outbox.poll(changeCount: 2) { plain("other") } == .clip(id: "id-1", mime: "text/plain", text: "other"))
     }
+
+    @Test func noteAppliedSkipsThatChange() {
+        var outbox = makeOutbox()
+        _ = outbox.poll(changeCount: 1) { plain(nil) }
+        outbox.noteApplied(text: "x", changeCount: 2)
+        var reads = 0
+        #expect(outbox.poll(changeCount: 2) { reads += 1; return plain("x") } == nil)
+        #expect(reads == 0)
+    }
+
+    @Test func noteAppliedBeforeBaselineKeepsFirstPollAsBaseline() {
+        var outbox = makeOutbox()
+        outbox.noteApplied(text: "x", changeCount: 5)
+        #expect(outbox.poll(changeCount: 5) { plain("x") } == nil)
+        #expect(outbox.poll(changeCount: 6) { plain("x") } == nil)
+        #expect(outbox.poll(changeCount: 7) { plain("y") } == .clip(id: "id-1", mime: "text/plain", text: "y"))
+    }
 }

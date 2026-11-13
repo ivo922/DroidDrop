@@ -61,7 +61,17 @@ final class AppModel: ObservableObject {
             destination: FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0].appending(path: "DroidDrop")
         )
         self.transfers = transfers
-        server.onMessage = { [weak transfers] peer, message in transfers?.receive(message, from: peer.fingerprint) }
+        server.onMessage = { [weak self, weak transfers] peer, message in
+            guard case .clip(_, let mime, let text) = message else {
+                transfers?.receive(message, from: peer.fingerprint)
+                return
+            }
+            // Rejected clips are dropped silently: their text is never logged.
+            guard let text = ClipboardInbox.accept(mime: mime, text: text) else { return }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { _ = self?.clipboard?.apply(text) }
+            }
+        }
         // DispatchQueue.main keeps FIFO order (one Task per callback does not), so a stale progress snapshot can
         // never land after the final idle one.
         transfers.onSnapshot = { [weak self] snapshot in

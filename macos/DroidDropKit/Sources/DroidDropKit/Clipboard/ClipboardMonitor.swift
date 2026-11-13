@@ -38,6 +38,15 @@ public final class ClipboardMonitor {
         timer = nil
     }
 
+    /// Writes a clip from the phone and records it so it is not sent back. False when the pasteboard refused it.
+    @discardableResult
+    public func apply(_ text: String) -> Bool {
+        pasteboard.clearContents()
+        guard pasteboard.setString(text, forType: .string) else { return false }
+        outbox.noteApplied(text: text, changeCount: pasteboard.changeCount)
+        return true
+    }
+
     func tick() {
         let pasteboard = pasteboard
         if let clip = outbox.poll(changeCount: pasteboard.changeCount, contents: { .read(from: pasteboard) }) {
