@@ -55,7 +55,7 @@ class MainActivity : ComponentActivity() {
     // A clip the service just applied from the Mac also lands here; ClipOutbox skips it as FromMac.
     private val clipListener = ClipboardManager.OnPrimaryClipChangedListener {
         val (text, sensitive) = OutgoingClip.read(this)
-        lifecycleScope.launch { OutgoingClip.send(this@MainActivity, text, automatic = true, sensitive = sensitive) }
+        OutgoingClip.send(this, text, automatic = true, sensitive = sensitive)
     }
 
     private val runtimePermissions = registerForActivityResult(
