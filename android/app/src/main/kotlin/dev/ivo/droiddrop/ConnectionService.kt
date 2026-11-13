@@ -165,6 +165,7 @@ class ConnectionService : Service() {
                 }
             } finally {
                 transfers.close()
+                Clips.link.detach()
             }
             if (paired) return true
         }
@@ -232,6 +233,8 @@ class ConnectionService : Service() {
                     }
                 } finally {
                     transfers.close()
+                    // Sessions run one at a time under loopMutex, so this cannot clear a newer session's sender.
+                    Clips.link.detach()
                 }
                 if (connected) break
             }
@@ -294,6 +297,7 @@ class ConnectionService : Service() {
         override fun onConnected(serverName: String, sender: MessageSender) {
             onConnected()
             transfers.connected(sender)
+            Clips.link.attach(sender)
             ConnectionStatus.state.value = ConnectionState.Connected(serverName)
         }
 
@@ -310,7 +314,12 @@ class ConnectionService : Service() {
                 return
             }
             scope.launch(Dispatchers.Main) {
-                if (!clipboard.write(text)) Log.w(TAG, "could not apply clip ${message.id}")
+                if (clipboard.write(text)) {
+                    // Before the clip listener runs: it is dispatched later on this same looper.
+                    Clips.link.outbox.noteRemote(text)
+                } else {
+                    Log.w(TAG, "could not apply clip ${message.id}")
+                }
             }
         }
 
