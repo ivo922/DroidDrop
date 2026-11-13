@@ -9,14 +9,18 @@ import kotlinx.coroutines.launch
 
 /**
  * Share-sheet target ("Send to Mac"). It has no layout: it opens the shared URIs while its grant is valid (R9),
- * queues them, and finishes. A text-only share has no URIs and gets "Nothing to send." (text arrives in milestone 5).
+ * queues them, and finishes. A share without URIs sends its EXTRA_TEXT as a clip (EXTRA_SUBJECT is not sent).
  */
 class ShareActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val uris = sharedUris(intent)
         lifecycleScope.launch {
-            OutgoingFiles.send(this@ShareActivity, uris)
+            if (uris.isEmpty() && intent.action == Intent.ACTION_SEND) {
+                OutgoingClip.send(this@ShareActivity, intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString(), automatic = false)
+            } else {
+                OutgoingFiles.send(this@ShareActivity, uris)
+            }
             finish()
         }
     }

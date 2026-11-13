@@ -74,6 +74,7 @@ class ConnectionService : Service() {
             ConnectionStatus.state.collect { state ->
                 getSystemService(NotificationManager::class.java)
                     .notify(Notifications.ID, Notifications.build(this@ConnectionService, state))
+                ClipboardTileService.refresh(this@ConnectionService)
             }
         }
         scope.launch {
