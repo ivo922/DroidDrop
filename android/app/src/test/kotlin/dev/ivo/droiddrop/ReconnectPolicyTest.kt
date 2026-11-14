@@ -184,6 +184,19 @@ class ReconnectPolicyTest {
     }
 
     @Test
+    fun backoffDoublesUpToTheCap() {
+        assertEquals(2_000L, ReconnectPolicy.nextBackoff(1_000L, woke = false))
+        assertEquals(60_000L, ReconnectPolicy.nextBackoff(32_000L, woke = false))
+        assertEquals(60_000L, ReconnectPolicy.nextBackoff(60_000L, woke = false))
+    }
+
+    @Test
+    fun aWakeResetsTheBackoff() {
+        // A new network, an opened app or a queued file means "try now", and the next wait starts short again.
+        assertEquals(ReconnectPolicy.INITIAL_BACKOFF_MILLIS, ReconnectPolicy.nextBackoff(60_000L, woke = true))
+    }
+
+    @Test
     fun deviceNameIsNeverBlank() {
         assertEquals("Pixel", ReconnectPolicy.deviceName("Pixel", "sdk"))
         assertEquals("sdk", ReconnectPolicy.deviceName(null, "sdk"))

@@ -45,10 +45,11 @@ import kotlinx.coroutines.withTimeoutOrNull
 class ConnectionService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val loopMutex = Mutex()
-    private val networkChanged = Channel<Unit>(Channel.CONFLATED)
+    /** Ends the reconnect wait early: a new network, the app opened, or a file queued. */
+    private val wake = Channel<Unit>(Channel.CONFLATED)
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
-            networkChanged.trySend(Unit)
+            wake.trySend(Unit)
         }
     }
     private lateinit var store: PairingStore
@@ -102,7 +103,9 @@ class ConnectionService : Service() {
             Notifications.build(this, ConnectionStatus.state.value),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
         )
-        if (pairUri != null || loop?.isActive != true) {
+        if (pairUri == null && loop?.isActive == true) {
+            wake.trySend(Unit) // someone wants the Mac now: skip the rest of the backoff
+        } else {
             loop?.cancel()
             loop = scope.launch {
                 loopMutex.withLock {
@@ -140,7 +143,7 @@ class ConnectionService : Service() {
      * would crash the process, and START_STICKY would crash-loop it.
      */
     private suspend fun loadIdentity(): DeviceIdentity {
-        var backoff = INITIAL_BACKOFF_MILLIS
+        var backoff = ReconnectPolicy.INITIAL_BACKOFF_MILLIS
         while (true) {
             try {
                 return withContext(Dispatchers.IO) { AndroidIdentity.loadOrCreate() }
@@ -150,7 +153,7 @@ class ConnectionService : Service() {
                 Log.e(TAG, "could not load the identity", e)
                 ConnectionStatus.state.value = ConnectionState.Failed("Could not load this phone's identity. Retrying…")
                 delay(backoff)
-                backoff = (backoff * 2).coerceAtMost(MAX_BACKOFF_MILLIS)
+                backoff = ReconnectPolicy.nextBackoff(backoff, woke = false)
             }
         }
     }
@@ -204,7 +207,7 @@ class ConnectionService : Service() {
     }
 
     private suspend fun connectLoop(client: DroidDropClient, keepFailure: Boolean = false) {
-        var backoff = INITIAL_BACKOFF_MILLIS
+        var backoff = ReconnectPolicy.INITIAL_BACKOFF_MILLIS
         val rejections = RejectionCounter()
         var announceSearch = !keepFailure
         while (true) {
@@ -249,7 +252,7 @@ class ConnectionService : Service() {
 
             if (connected) {
                 announceSearch = true
-                backoff = INITIAL_BACKOFF_MILLIS
+                backoff = ReconnectPolicy.INITIAL_BACKOFF_MILLIS
                 continue
             }
             // Never unpairs (see ReconnectPolicy): it shows the problem and keeps trying until the user pairs again.
@@ -258,8 +261,8 @@ class ConnectionService : Service() {
             val problem = verdict.problem
             if (problem != null) ConnectionStatus.state.value = ConnectionState.Failed(problem.message(mac.name))
             announceSearch = problem == null
-            withTimeoutOrNull(backoff) { networkChanged.receive() }
-            backoff = (backoff * 2).coerceAtMost(MAX_BACKOFF_MILLIS)
+            val woke = withTimeoutOrNull(backoff) { wake.receive() } != null
+            backoff = ReconnectPolicy.nextBackoff(backoff, woke)
         }
     }
 
@@ -327,8 +330,6 @@ class ConnectionService : Service() {
     companion object {
         private const val TAG = "ConnectionService"
         private const val EXTRA_PAIR_URI = "pairUri"
-        private const val INITIAL_BACKOFF_MILLIS = 1_000L
-        private const val MAX_BACKOFF_MILLIS = 60_000L
         private const val PROGRESS_INTERVAL_MILLIS = 500L
         private const val OUTGOING_SPOOL_MAX_AGE_MILLIS = 24 * 60 * 60 * 1_000L
 

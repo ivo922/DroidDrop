@@ -18,6 +18,8 @@ import javax.net.ssl.SSLException
  */
 internal object ReconnectPolicy {
     const val MAX_REJECTIONS = 3
+    const val INITIAL_BACKOFF_MILLIS = 1_000L
+    const val MAX_BACKOFF_MILLIS = 60_000L
 
     enum class FailureKind { Retry, Rejection, PinMismatch }
 
@@ -29,6 +31,10 @@ internal object ReconnectPolicy {
         }
         return FailureKind.Retry
     }
+
+    /** The next wait between rounds: doubled up to the cap, or back to the start after a wake. */
+    fun nextBackoff(current: Long, woke: Boolean): Long =
+        if (woke) INITIAL_BACKOFF_MILLIS else (current * 2).coerceAtMost(MAX_BACKOFF_MILLIS)
 
     /** Pairing reached a Mac that already trusts this identity ("Pair again" while still paired): treat it as paired. */
     fun alreadyPaired(error: Throwable): Boolean =
