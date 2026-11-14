@@ -8,15 +8,15 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
 import java.net.Inet4Address
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 
 data class Endpoint(val host: String, val port: Int)
 
-/** Finds the paired Mac via Bonjour (`_droiddrop._tcp`, TXT `fp`). Call [close] when the owner is destroyed. */
+/** Finds the paired Mac via Bonjour (`_droiddrop._tcp`, TXT `fp`). */
 class MacLocator(context: Context) {
     private val nsd = context.getSystemService(NsdManager::class.java)
     private val wifi = context.getSystemService(WifiManager::class.java)
-    private val executor = Executors.newSingleThreadExecutor()
 
     suspend fun find(fingerprint: String, timeoutMillis: Long = 5_000): Endpoint? {
         val lock = wifi.createMulticastLock("droiddrop-nsd").apply {
@@ -45,7 +45,7 @@ class MacLocator(context: Context) {
                 synchronized(registration) {
                     if (finished) return
                     infoCallbacks += callback
-                    nsd.registerServiceInfoCallback(service, executor, callback)
+                    nsd.registerServiceInfoCallback(service, callbacks, callback)
                 }
             }
             override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) { result.complete(null) }
@@ -65,12 +65,16 @@ class MacLocator(context: Context) {
         }
     }
 
-    /** Stops the callback thread; [find] must not be called afterwards. */
-    fun close() {
-        executor.shutdown()
-    }
-
     private companion object {
         const val SERVICE_TYPE = "_droiddrop._tcp"
+
+        /**
+         * One callback thread for the process, never shut down: NsdManager delivers onServiceInfoCallbackUnregistered
+         * after find's cleanup and does not catch RejectedExecutionException, so a per-service executor that was shut
+         * down on destroy would crash the process. A per-service executor that is never shut down leaks a thread.
+         */
+        val callbacks: Executor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "droiddrop-nsd").apply { isDaemon = true }
+        }
     }
 }
