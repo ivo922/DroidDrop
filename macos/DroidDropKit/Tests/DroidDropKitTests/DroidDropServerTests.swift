@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import Testing
 @testable import DroidDropKit
 
@@ -217,6 +218,56 @@ import Testing
         try await events.expectClosed()
         #expect(ContinuousClock.now - started < .seconds(3))
         #expect(server.connectedPeers().isEmpty)
+    }
+
+    // The dev CLI or another app may hold 47321: the server must take another port and advertise it.
+    @Test func fallsBackToAnotherPortWhenTaken() async throws {
+        let blocker = try NWListener(using: .tcp, on: .any)
+        let blockerReady = DispatchSemaphore(value: 0)
+        blocker.stateUpdateHandler = { if case .ready = $0 { blockerReady.signal() } }
+        blocker.newConnectionHandler = { $0.cancel() }
+        blocker.start(queue: DispatchQueue(label: "test.blocker"))
+        defer { blocker.cancel() }
+        #expect(blockerReady.wait(timeout: .now() + 5) == .success)
+        let taken = try #require(blocker.port?.rawValue)
+
+        let server = DroidDropServer(
+            identity: try Identity.generate(commonName: "Mac"),
+            peers: try PeerStore(url: temporaryDirectory().appending(path: "peers.json")),
+            configuration: .init(name: "Test Mac", port: taken, advertise: false)
+        )
+        defer { server.stop() }
+        let port = try await server.start()
+        #expect(port != taken)
+        #expect(server.openPairingWindow(hosts: ["127.0.0.1"]).port == Int(port))
+    }
+
+    // A listener that dies after it was ready (mDNSResponder restart, network teardown) must come back by itself:
+    // otherwise the menu says "No phone connected" while no phone can ever connect.
+    @Test func listenerFailureAfterReadyRestartsIt() async throws {
+        let states = Recorded<UInt16?>()
+        let (server, _) = try await makeServer { $0.onListeningChanged = { states.append($0) } }
+        defer { server.stop() }
+        server.failListenerForTesting()
+        try await eventually { states.values.count >= 2 }
+        #expect(states.values.first == .some(nil))
+        let restarted = try #require(states.values.last ?? nil)
+        let (connection, events) = try await pair(server, port: restarted)
+        connection.send(.ping(id: 1))
+        #expect(try await events.nextMessage() == .pong(id: 1))
+    }
+
+    @Test func stopBeforeReadyEndsStart() async throws {
+        let server = DroidDropServer(
+            identity: try Identity.generate(commonName: "Mac"),
+            peers: try PeerStore(url: temporaryDirectory().appending(path: "peers.json")),
+            configuration: .init(name: "Test Mac", port: 0, advertise: false)
+        )
+        let result = Recorded<Bool>()
+        server.start { result.append((try? $0.get()) != nil) }
+        server.stop()
+        try await eventually { !result.values.isEmpty }
+        #expect(result.values.count == 1)
     }
 
     // A LAN device that opens sockets and never finishes TLS must not hold them for the 90 s idle timeout.

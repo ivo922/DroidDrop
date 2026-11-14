@@ -44,6 +44,8 @@ public final class DroidDropServer: @unchecked Sendable {
     public let queue = DispatchQueue(label: "dev.ivo.droiddrop.server")
     public let identity: Identity
     public var onConnectedPeersChanged: (([Peer]) -> Void)?
+    /// After `start` succeeded: the port while listening again, nil while the listener is down and being restarted.
+    public var onListeningChanged: ((UInt16?) -> Void)?
     public var onPeerPaired: ((Peer) -> Void)?
     public var onMessage: ((Peer, Message) -> Void)?
     /// An established (registered) session: peer fingerprint and the session's id for `send` / `sendChunk`.
@@ -60,6 +62,9 @@ public final class DroidDropServer: @unchecked Sendable {
     private var pairingReplaces: Data?
     private var listener: NWListener?
     private var port: UInt16?
+    /// Between `start` and `stop`; a restart scheduled after `stop` does nothing.
+    private var running = false
+    private var listenerFailures = 0
     private var connections: [ObjectIdentifier: FramedConnection] = [:]
     /// Remote host of each connection that is not an established session yet (`pendingPerHost`).
     private var pendingHosts: [ObjectIdentifier: String] = [:]
@@ -96,10 +101,13 @@ public final class DroidDropServer: @unchecked Sendable {
 
     // MARK: Lifecycle
 
-    /// Listens on the configured port, falling back to an OS-assigned one. `completion` runs once, on `queue`.
+    /// Listens on the configured port, falling back to an OS-assigned one. `completion` runs once, on `queue`, when
+    /// the listener is ready or has failed for good. While it waits (no network yet, the Local Network prompt still
+    /// open) `completion` does not run. A listener that fails later is restarted; see `onListeningChanged`.
     public func start(completion: @escaping (Result<UInt16, Error>) -> Void) {
         queue.async { [weak self] in
             guard let self else { return completion(.failure(CancellationError())) }
+            self.running = true
             self.startListener(port: self.configuration.port, completion: completion)
         }
     }
@@ -113,6 +121,7 @@ public final class DroidDropServer: @unchecked Sendable {
     public func stop() {
         queue.async { [weak self] in
             guard let self else { return }
+            self.running = false
             self.listener?.cancel()
             self.listener = nil
             self.port = nil
@@ -121,7 +130,8 @@ public final class DroidDropServer: @unchecked Sendable {
         }
     }
 
-    private func startListener(port: UInt16, completion: @escaping (Result<UInt16, Error>) -> Void) {
+    /// `completion` is nil for a restart, which reports through `onListeningChanged` instead.
+    private func startListener(port: UInt16, completion: ((Result<UInt16, Error>) -> Void)?) {
         let listener: NWListener
         do {
             let parameters = TLSParameters.make(identity: try identity.secIdentity(), queue: queue) { [weak self] fingerprint in
@@ -130,7 +140,7 @@ public final class DroidDropServer: @unchecked Sendable {
             }
             listener = try NWListener(using: parameters, on: port == 0 ? .any : NWEndpoint.Port(rawValue: port)!)
         } catch {
-            completion(.failure(error))
+            if let completion { completion(.failure(error)) } else { scheduleRestart() }
             return
         }
         if configuration.advertise {
@@ -141,36 +151,80 @@ public final class DroidDropServer: @unchecked Sendable {
             guard let self else { return connection.cancel() }
             self.accept(connection)
         }
-        var reported = false
+        var completion = completion
         listener.stateUpdateHandler = { [weak self, weak listener] state in
-            guard !reported else { return }
             guard let self, let listener else {
-                reported = true
-                return completion(.failure(CancellationError()))
+                completion?(.failure(CancellationError()))
+                completion = nil
+                return
+            }
+            guard self.listener === listener else {
+                // Replaced, failed or stopped: its events are stale, except that a stop before ready ends `start`.
+                if case .cancelled = state, let done = completion {
+                    completion = nil
+                    done(.failure(CancellationError()))
+                }
+                return
             }
             switch state {
             case .ready:
-                reported = true
                 self.port = listener.port?.rawValue
-                completion(.success(self.port ?? port))
-            case .failed(let error), .waiting(let error):
-                reported = true
-                listener.cancel()
-                if self.listener === listener { self.listener = nil }
-                if port != 0 {
-                    self.startListener(port: 0, completion: completion)
+                self.listenerFailures = 0
+                if let done = completion {
+                    completion = nil
+                    done(.success(self.port ?? port))
                 } else {
-                    completion(.failure(error))
+                    self.onListeningChanged?(self.port)
                 }
-            case .cancelled:
-                reported = true
-                completion(.failure(CancellationError()))
-            default:
+            case .failed(let error):
+                listener.cancel()
+                self.listener = nil
+                if port != 0 {
+                    // Port taken (EADDRINUSE arrives as .failed): an OS-assigned one; pairing URIs carry it.
+                    let handOver = completion
+                    completion = nil  // this listener's .cancelled must not end `start`
+                    self.startListener(port: 0, completion: handOver)
+                } else if let done = completion {
+                    completion = nil
+                    done(.failure(error))
+                } else {
+                    self.listenerFailed()
+                }
+            case .waiting, .setup, .cancelled:
+                // .waiting: no usable network yet or the Local Network prompt is open; Network starts it later.
+                break
+            @unknown default:
                 break
             }
         }
         self.listener = listener
         listener.start(queue: queue)
+    }
+
+    /// A listener that was serving died: report it and bring a new one up, with backoff.
+    private func listenerFailed() {
+        port = nil
+        onListeningChanged?(nil)
+        scheduleRestart()
+    }
+
+    private func scheduleRestart() {
+        listenerFailures += 1
+        let delay = min(30, pow(2, Double(listenerFailures - 1)))
+        queue.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.running, self.listener == nil else { return }
+            self.startListener(port: self.configuration.port, completion: nil)
+        }
+    }
+
+    /// Test hook: takes the post-ready failure path of the current listener.
+    func failListenerForTesting() {
+        queue.async { [weak self] in
+            guard let self, let listener = self.listener else { return }
+            listener.cancel()
+            self.listener = nil
+            self.listenerFailed()
+        }
     }
 
     // MARK: Public operations

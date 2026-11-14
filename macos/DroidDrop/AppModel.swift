@@ -4,9 +4,9 @@ import Foundation
 
 /// Menu-bar state for the local server.
 ///
-/// `isListening` follows `start`'s completion only. A `.waiting` listener fails that
-/// completion (after the server's port fallback). The server does not report a listener
-/// failure once `start` has succeeded, so the menu cannot show one.
+/// `isListening` follows `start`'s completion, then `onListeningChanged`: a listener that fails later goes
+/// "Not listening" until the server's restart brings it back. While the listener waits for a network (or the
+/// Local Network prompt), `start` has not completed and the menu says "Starting…".
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var pairedPeers: [Peer] = []
@@ -115,6 +115,11 @@ final class AppModel: ObservableObject {
                 self.pairingExpiresAt = nil
                 self.noNetwork = false
                 self.refreshPeers()
+            }
+        }
+        server.onListeningChanged = { [weak self] port in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.isListening = port != nil }
             }
         }
         server.start { [weak self] result in
