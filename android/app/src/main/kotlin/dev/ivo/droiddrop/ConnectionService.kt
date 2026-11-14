@@ -136,6 +136,7 @@ class ConnectionService : Service() {
 
     override fun onDestroy() {
         scope.cancel()
+        locator.close()
         TransferNotifications.cancelProgress(this)
         getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(networkCallback)
         super.onDestroy()
