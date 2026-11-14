@@ -28,7 +28,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
@@ -218,8 +217,7 @@ class ConnectionService : Service() {
             }.distinct()
 
             var connected = false
-            var pinMismatches = 0
-            var otherFailures = 0
+            val round = ReconnectRound(rejections)
             for (endpoint in candidates) {
                 val transfers = newTransferSession()
                 try {
@@ -234,25 +232,8 @@ class ConnectionService : Service() {
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    if (!connected) {
-                        when (rejections.onFailure(ReconnectPolicy.classify(e))) {
-                            RejectionCounter.Outcome.Backoff -> {
-                                otherFailures++
-                                Log.w(TAG, "session with $endpoint ended", e)
-                            }
-                            RejectionCounter.Outcome.UnpairPinMismatch -> {
-                                pinMismatches++
-                                Log.w(TAG, "certificate at $endpoint did not match the pin", e)
-                            }
-                            RejectionCounter.Outcome.UnpairRejections -> {
-                                Log.w(TAG, "Mac rejected the phone", e)
-                                forgetPairing("${mac.name} no longer accepts this phone. Unpair and pair again.")
-                                return
-                            }
-                        }
-                    } else {
-                        Log.w(TAG, "session with $endpoint ended", e)
-                    }
+                    Log.w(TAG, "session with $endpoint ended", e)
+                    if (!connected) round.failed(endpoint, ReconnectPolicy.classify(e))
                 } finally {
                     transfers.close()
                     // Sessions run one at a time under loopMutex, so this cannot clear a newer session's sender.
@@ -260,35 +241,20 @@ class ConnectionService : Service() {
                 }
                 if (connected) break
             }
-            if (!connected && pinMismatches > 0 && otherFailures == 0) {
-                forgetPairing("The paired Mac's certificate changed. Pair again.")
-                return
-            }
 
-            announceSearch = true
             if (connected) {
+                announceSearch = true
                 backoff = INITIAL_BACKOFF_MILLIS
                 continue
             }
+            // Never unpairs (see ReconnectPolicy): it shows the problem and keeps trying until the user pairs again.
+            val verdict = round.verdict()
+            if (verdict.staleHosts.isNotEmpty()) store.forgetAddresses(verdict.staleHosts)
+            val problem = verdict.problem
+            if (problem != null) ConnectionStatus.state.value = ConnectionState.Failed(problem.message(mac.name))
+            announceSearch = problem == null
             withTimeoutOrNull(backoff) { networkChanged.receive() }
             backoff = (backoff * 2).coerceAtMost(MAX_BACKOFF_MILLIS)
-        }
-    }
-
-    /**
-     * Drops the outgoing queue, clears the paired Mac and deletes the keystore identity so the next pair presents a
-     * new fingerprint.
-     * Runs to completion even when the service scope is cancelling.
-     */
-    private suspend fun forgetPairing(message: String) {
-        withContext(NonCancellable) {
-            Transfers.sender.cancelAll() // the queue was for the Mac being forgotten
-            store.clear()
-            withContext(Dispatchers.IO) {
-                runCatching { AndroidIdentity.delete() }.onFailure { Log.e(TAG, "identity delete failed", it) }
-            }
-            ConnectionStatus.state.value = ConnectionState.Failed(message)
-            stopSelf()
         }
     }
 

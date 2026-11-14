@@ -21,6 +21,14 @@ class PairingStore(context: Context) {
         }
     }
 
+    /** Drops remembered addresses where another certificate answered (a reassigned DHCP address, another server). */
+    fun forgetAddresses(hosts: Set<String>) {
+        synchronized(lock) {
+            val mac = read() ?: return
+            write(mac.copy(hosts = mac.hosts.filterNot { it in hosts }))
+        }
+    }
+
     fun clear() = synchronized(lock) { prefs.edit { clear() } }
 
     private fun read(): PairedMac? {
