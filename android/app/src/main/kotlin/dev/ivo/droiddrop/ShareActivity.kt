@@ -4,8 +4,6 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
-import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.launch
 
 /**
  * Share-sheet target ("Send to Mac"). It has no layout: it opens the shared URIs while its grant is valid (R9),
@@ -21,11 +19,8 @@ class ShareActivity : ComponentActivity() {
             finish()
             return
         }
-        val uris = sharedUris(intent)
-        lifecycleScope.launch {
-            OutgoingFiles.send(this@ShareActivity, uris)
-            finish()
-        }
+        // The activity stays until the files are open: the share's URI grant lasts as long as it does (R9).
+        OutgoingFiles.send(this, sharedUris(intent), onDone = ::finish)
     }
 
     private fun sharedUris(intent: Intent): List<Uri> {

@@ -15,12 +15,16 @@ import java.nio.channels.FileChannel
 import java.nio.file.StandardOpenOption
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Turns shared or picked URIs into queued [OutgoingFile]s. URIs are opened here, in the activity that received them
- * while its grant is valid, never by the service (R9): under START_STICKY a service's grants end when onStartCommand returns.
+ * Turns shared or picked URIs into queued [OutgoingFile]s. URIs are opened here while the activity that received them
+ * is alive (its grant is valid), never by the service (R9): under START_STICKY a service's grants end when
+ * onStartCommand returns.
  */
 object OutgoingFiles {
     private const val DEFAULT_MIME = "application/octet-stream"
@@ -55,16 +59,34 @@ object OutgoingFiles {
         }
     }
 
+    /**
+     * Outlives the activity: a slow open (a cloud provider downloading, a pipe being spooled) must not be cancelled
+     * when the user leaves the translucent share window. If the URI grant ends first, the open fails with a toast.
+     */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /** Starts [sendNow] in the process scope; [onDone] runs on the main thread when it ends (the caller finishes). */
+    fun send(activity: ComponentActivity, uris: List<Uri>, onDone: () -> Unit = {}) {
+        val context = activity.applicationContext
+        scope.launch {
+            try {
+                sendNow(context, uris)
+            } finally {
+                onDone()
+            }
+        }
+    }
+
     /** Gate, open each URI on Dispatchers.IO, enqueue on Transfers.sender, start ConnectionService, toast. */
-    suspend fun send(activity: ComponentActivity, uris: List<Uri>) {
-        val mac = PairingStore(activity).load()
+    private suspend fun sendNow(context: Context, uris: List<Uri>) {
+        val mac = PairingStore(context).load()
         val refusal = SendGate.refusal(
             paired = mac != null,
-            localNetworkAllowed = LocalNetwork.allowed(activity),
+            localNetworkAllowed = LocalNetwork.allowed(context),
             fileCount = uris.size,
         )
         if (refusal != null) {
-            toast(activity, refusal)
+            toast(context, refusal)
             return
         }
         val opened = mutableListOf<OutgoingFile>()
@@ -74,11 +96,11 @@ object OutgoingFiles {
             withContext(Dispatchers.IO) {
                 for (uri in uris) {
                     try {
-                        opened += open(activity, uri)
+                        opened += open(context, uri)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
-                        failed += displayName(activity, uri)
+                        failed += displayName(context, uri)
                     }
                 }
             }
@@ -86,18 +108,18 @@ object OutgoingFiles {
                 Transfers.sender.enqueue(opened)
                 handedOver = true
                 try {
-                    ConnectionService.start(activity)
+                    ConnectionService.start(context)
                 } catch (e: RuntimeException) {
                     // The queue is in memory and waits for the next start (R5).
-                    toast(activity, "Could not start DroidDrop. Open the app and try again.")
+                    toast(context, "Could not start DroidDrop. Open the app and try again.")
                 }
-                toast(activity, "Sending ${opened.size} ${if (opened.size == 1) "file" else "files"} to ${mac?.name ?: "Mac"}")
+                toast(context, "Sending ${opened.size} ${if (opened.size == 1) "file" else "files"} to ${mac?.name ?: "Mac"}")
             }
         } finally {
-            // Cancelled mid-open (the activity went away): nothing owns these descriptors yet.
+            // Failed mid-open: nothing owns these descriptors yet.
             if (!handedOver) opened.forEach(OutgoingFile::release)
         }
-        failed.forEach { toast(activity, "Could not open $it") }
+        failed.forEach { toast(context, "Could not open $it") }
     }
 
     private fun displayName(context: Context, uri: Uri): String {
