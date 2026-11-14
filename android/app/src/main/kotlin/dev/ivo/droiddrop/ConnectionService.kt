@@ -118,7 +118,12 @@ class ConnectionService : Service() {
                     // Mac connects or the first search round ends. CancellationException propagates.
                     if (pairUri != null) {
                         val paired = pair(client, pairUri)
-                        if (!paired && store.load() == null) return@withLock
+                        if (!paired && store.load() == null) {
+                            // Nothing to reconnect to: the app keeps showing the Failed state, the notification goes.
+                            // startId: a newer pair or start that arrived meanwhile keeps the service.
+                            stopSelf(startId)
+                            return@withLock
+                        }
                         connectLoop(client, keepFailure = !paired)
                     } else {
                         connectLoop(client)
