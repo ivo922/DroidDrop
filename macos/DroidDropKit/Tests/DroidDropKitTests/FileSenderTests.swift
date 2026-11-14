@@ -64,6 +64,31 @@ final class FakeLink: TransferLink, @unchecked Sendable {
     }
 }
 
+/** A FileSender hash that blocks until released, and counts how often it ran. */
+final class HashGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let gate = DispatchSemaphore(value: 0)
+    private var count = 0
+    var started: Int { lock.withLock { count } }
+
+    func run(_ url: URL) throws -> (hex: String, size: Int) {
+        lock.withLock { count += 1 }
+        gate.wait()
+        return try FileDigest.sha256(of: url)
+    }
+
+    func release() { gate.signal() }
+
+    func waitForStart(timeout: TimeInterval = 5) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if started > 0 { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw TimeoutError()
+    }
+}
+
 final class OutcomeRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var recordedOutcomes: [TransferOutcome] = []
@@ -203,6 +228,26 @@ final class OutcomeRecorder: @unchecked Sendable {
         #expect(link2.chunkCount == 0)
         queue.sync { sender.receive(.fileAccept(transferId: id2, offset: 0)) }
         #expect(Data(try await link2.chunks(count: 3).flatMap(\.data)) == data)
+    }
+
+    @Test func reconnectWhileHashingKeepsTheOneHash() async throws {
+        // A roaming phone reconnects several times while a big file hashes: each flap must not start another full read.
+        let hashes = HashGate()
+        let sender = FileSender(queue: queue, hash: { url in try hashes.run(url) })
+        let url = try write(sample(1000), name: "big.bin")
+        queue.sync { sender.enqueue([url]); sender.connected(link) }
+        try await hashes.waitForStart()
+        queue.sync { sender.disconnected() }
+        let link2 = FakeLink()
+        queue.sync { sender.connected(link2) }
+        queue.sync { sender.disconnected() }
+        let link3 = FakeLink()
+        queue.sync { sender.connected(link3) }
+        hashes.release()
+        _ = try await offerID(link3, name: "big.bin")
+        #expect(hashes.started == 1)
+        #expect(link.messageCount == 0)
+        #expect(link2.messageCount == 0)
     }
 
     @Test func rejectAndFailedResultMoveToNextFile() async throws {
