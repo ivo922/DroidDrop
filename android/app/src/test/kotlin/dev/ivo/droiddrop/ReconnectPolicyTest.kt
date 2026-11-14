@@ -36,7 +36,7 @@ class ReconnectPolicyTest {
         assertEquals(ReconnectPolicy.FailureKind.PinMismatch, ReconnectPolicy.classify(ssl))
         assertEquals(ReconnectPolicy.FailureKind.PinMismatch, ReconnectPolicy.classify(wrapped))
 
-        val counter = RejectionCounter()
+        val counter = ReconnectHistory()
         counter.record(ReconnectPolicy.classify(wrapped))
         assertEquals(0, counter.consecutive)
     }
@@ -66,7 +66,7 @@ class ReconnectPolicyTest {
             SocketTimeoutException("Read timed out"),
             noCert,
         )
-        val counter = RejectionCounter()
+        val counter = ReconnectHistory()
         for (error in samples) {
             assertEquals(ReconnectPolicy.FailureKind.Retry, ReconnectPolicy.classify(error), error.toString())
             counter.record(ReconnectPolicy.classify(error))
@@ -88,7 +88,7 @@ class ReconnectPolicyTest {
             SocketException("connect failed: ETIMEDOUT (Connection timed out)"),
             SocketException("connect failed: EPERM (Operation not permitted)"),
         )
-        val counter = RejectionCounter()
+        val counter = ReconnectHistory()
         for (error in samples) {
             assertEquals(ReconnectPolicy.FailureKind.Retry, ReconnectPolicy.classify(error), error.toString())
             counter.record(ReconnectPolicy.classify(error))
@@ -98,7 +98,7 @@ class ReconnectPolicyTest {
 
     @Test
     fun threeConsecutiveRejectionsMeanRejectedAndRetriesDoNotResetTheStreak() {
-        val counter = RejectionCounter()
+        val counter = ReconnectHistory()
         counter.record(ReconnectPolicy.FailureKind.Rejection)
         counter.record(ReconnectPolicy.FailureKind.Retry)
         assertEquals(1, counter.consecutive)
@@ -111,7 +111,7 @@ class ReconnectPolicyTest {
 
     @Test
     fun connectedResetsTheStreak() {
-        val counter = RejectionCounter()
+        val counter = ReconnectHistory()
         repeat(3) { counter.record(ReconnectPolicy.FailureKind.Rejection) }
         counter.onConnected()
         assertEquals(0, counter.consecutive)
@@ -122,16 +122,35 @@ class ReconnectPolicyTest {
     // default port, or an attacker on café Wi-Fi), so the round never unpairs: it drops that remembered address.
     @Test
     fun pinMismatchMarksTheAddressStaleWithoutUnpairing() {
-        val round = ReconnectRound(RejectionCounter())
+        val round = ReconnectRound(ReconnectHistory())
         round.failed(Endpoint("10.0.0.5", 47321), ReconnectPolicy.FailureKind.PinMismatch)
         val verdict = round.verdict()
         assertEquals(setOf("10.0.0.5"), verdict.staleHosts)
         assertEquals(ReconnectRound.Problem.CertificateChanged, verdict.problem)
     }
 
+    // A Mac reset has a new fingerprint: the mismatching host is dropped and Bonjour never matches again, so later
+    // rounds have nothing to try. The pair-again hint must stay until a connection succeeds.
+    @Test
+    fun certificateChangedStaysUntilAConnection() {
+        val history = ReconnectHistory()
+        ReconnectRound(history).failed(Endpoint("10.0.0.5", 47321), ReconnectPolicy.FailureKind.PinMismatch)
+        val first = ReconnectRound(history).also {
+            it.failed(Endpoint("10.0.0.5", 47321), ReconnectPolicy.FailureKind.PinMismatch)
+        }.verdict()
+        assertEquals(ReconnectRound.Problem.CertificateChanged, first.problem)
+        assertEquals(ReconnectRound.Problem.CertificateChanged, ReconnectRound(history).verdict().problem)
+        val retrying = ReconnectRound(history).also {
+            it.failed(Endpoint("10.0.0.6", 47321), ReconnectPolicy.FailureKind.Retry)
+        }
+        assertEquals(ReconnectRound.Problem.CertificateChanged, retrying.verdict().problem)
+        history.onConnected()
+        assertNull(ReconnectRound(history).verdict().problem)
+    }
+
     @Test
     fun mismatchNextToAnotherFailureIsJustSearching() {
-        val round = ReconnectRound(RejectionCounter())
+        val round = ReconnectRound(ReconnectHistory())
         round.failed(Endpoint("10.0.0.5", 47321), ReconnectPolicy.FailureKind.PinMismatch)
         round.failed(Endpoint("10.0.0.6", 47321), ReconnectPolicy.FailureKind.Retry)
         val verdict = round.verdict()
@@ -141,7 +160,7 @@ class ReconnectPolicyTest {
 
     @Test
     fun rejectionsAcrossRoundsReportRejected() {
-        val rejections = RejectionCounter()
+        val rejections = ReconnectHistory()
         repeat(2) {
             val round = ReconnectRound(rejections)
             round.failed(Endpoint("10.0.0.5", 47321), ReconnectPolicy.FailureKind.Rejection)
@@ -156,7 +175,7 @@ class ReconnectPolicyTest {
 
     @Test
     fun retriesOnlyAreJustSearching() {
-        val round = ReconnectRound(RejectionCounter())
+        val round = ReconnectRound(ReconnectHistory())
         round.failed(Endpoint("10.0.0.5", 47321), ReconnectPolicy.FailureKind.Retry)
         assertNull(round.verdict().problem)
         assertTrue(round.verdict().staleHosts.isEmpty())

@@ -53,16 +53,26 @@ internal object ReconnectPolicy {
     private val CERTIFICATE_ALERTS = listOf("certificate_unknown", "bad_certificate", "certificate_required")
 }
 
-/** Consecutive rejections. Retries and pin mismatches neither increment nor reset the streak. */
-internal class RejectionCounter(private val max: Int = ReconnectPolicy.MAX_REJECTIONS) {
+/**
+ * What the reconnect loop has learned since the last connection: consecutive rejections (retries and pin mismatches
+ * neither increment nor reset the streak), and whether a round had only another certificate answering.
+ */
+internal class ReconnectHistory(private val max: Int = ReconnectPolicy.MAX_REJECTIONS) {
     var consecutive: Int = 0
         private set
 
     /** The Mac has said no [max] times in a row since the last connection. */
     val rejected: Boolean get() = consecutive >= max
 
+    /**
+     * Sticky until a connection: after a Mac reset the mismatching host is forgotten and Bonjour never matches the
+     * old fingerprint, so later rounds have nothing to try and must keep the pair-again hint.
+     */
+    var certificateChanged: Boolean = false
+
     fun onConnected() {
         consecutive = 0
+        certificateChanged = false
     }
 
     fun record(kind: ReconnectPolicy.FailureKind) {
@@ -71,7 +81,7 @@ internal class RejectionCounter(private val max: Int = ReconnectPolicy.MAX_REJEC
 }
 
 /** The failures of one pass over the candidate endpoints, and what to show and forget after it. Never unpairs. */
-internal class ReconnectRound(private val rejections: RejectionCounter) {
+internal class ReconnectRound(private val history: ReconnectHistory) {
     enum class Problem {
         Rejected,
         CertificateChanged;
@@ -93,14 +103,15 @@ internal class ReconnectRound(private val rejections: RejectionCounter) {
             mismatched += endpoint.host
         } else {
             otherFailures++
-            rejections.record(kind)
+            history.record(kind)
         }
     }
 
     fun verdict(): Verdict {
+        if (mismatched.isNotEmpty() && otherFailures == 0) history.certificateChanged = true
         val problem = when {
-            rejections.rejected -> Problem.Rejected
-            mismatched.isNotEmpty() && otherFailures == 0 -> Problem.CertificateChanged
+            history.rejected -> Problem.Rejected
+            history.certificateChanged -> Problem.CertificateChanged
             else -> null
         }
         return Verdict(problem, mismatched.toSet())

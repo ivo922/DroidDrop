@@ -214,7 +214,7 @@ class ConnectionService : Service() {
 
     private suspend fun connectLoop(client: DroidDropClient, keepFailure: Boolean = false) {
         var backoff = ReconnectPolicy.INITIAL_BACKOFF_MILLIS
-        val rejections = RejectionCounter()
+        val history = ReconnectHistory()
         var announceSearch = !keepFailure
         while (true) {
             currentCoroutineContext().ensureActive()
@@ -231,7 +231,7 @@ class ConnectionService : Service() {
             }.distinct()
 
             var connected = false
-            val round = ReconnectRound(rejections)
+            val round = ReconnectRound(history)
             for (endpoint in candidates) {
                 val transfers = newTransferSession()
                 try {
@@ -239,7 +239,7 @@ class ConnectionService : Service() {
                         transfers,
                         onConnected = {
                             connected = true
-                            rejections.onConnected()
+                            history.onConnected()
                             store.rememberAddress(endpoint.host, endpoint.port)
                         },
                     ))
