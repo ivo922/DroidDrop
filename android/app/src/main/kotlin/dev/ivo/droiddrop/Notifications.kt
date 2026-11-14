@@ -23,7 +23,7 @@ object Notifications {
             context, 0, Intent(context, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE,
         )
         val builder = Notification.Builder(context, CHANNEL)
-            .setSmallIcon(android.R.drawable.stat_sys_upload)
+            .setSmallIcon(R.drawable.ic_stat_connection) // not an upload arrow: nothing is being sent
             .setContentTitle("DroidDrop")
             .setContentText(state.describe())
             .setContentIntent(open)
