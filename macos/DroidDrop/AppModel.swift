@@ -5,8 +5,8 @@ import Foundation
 /// Menu-bar state for the local server.
 ///
 /// `isListening` follows `start`'s completion, then `onListeningChanged`: a listener that fails later goes
-/// "Not listening" until the server's restart brings it back. While the listener waits for a network (or the
-/// Local Network prompt), `start` has not completed and the menu says "Starting…".
+/// "Not listening" until the server's restart brings it back. While the listener waits for a network (or Local
+/// Network access), `start` has not completed and the menu shows the waiting reason from `onListenerWaiting`.
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var pairedPeers: [Peer] = []
@@ -119,7 +119,21 @@ final class AppModel: ObservableObject {
         }
         server.onListeningChanged = { [weak self] port in
             DispatchQueue.main.async {
-                MainActor.assumeIsolated { self?.isListening = port != nil }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.isListening = port != nil
+                    // A restarted listener may have another port: an open QR code must carry the live one.
+                    if port != nil, self.pairURI != nil { self.openPairingIfPossible() }
+                }
+            }
+        }
+        server.onListenerWaiting = { [weak self] error in
+            let message = "Waiting for the network: " + Self.describe(error)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, !self.isListening else { return }
+                    self.serverError = message
+                }
             }
         }
         server.start { [weak self] result in

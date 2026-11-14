@@ -257,6 +257,34 @@ import Testing
         #expect(try await events.nextMessage() == .pong(id: 1))
     }
 
+    // A serving listener on the default port that fails must come back on that port (phones remember it), not
+    // fall back to an OS-assigned one as a port taken at startup does.
+    @Test func failedListenerOnAFixedPortComesBackOnIt() async throws {
+        let probe = try NWListener(using: .tcp, on: .any)
+        let probed = DispatchSemaphore(value: 0)
+        probe.stateUpdateHandler = { if case .ready = $0 { probed.signal() } }
+        probe.newConnectionHandler = { $0.cancel() }
+        probe.start(queue: DispatchQueue(label: "test.probe"))
+        #expect(probed.wait(timeout: .now() + 5) == .success)
+        let fixed = try #require(probe.port?.rawValue)
+        probe.cancel()
+        try await Task.sleep(for: .milliseconds(200))
+
+        let states = Recorded<UInt16?>()
+        let server = DroidDropServer(
+            identity: try Identity.generate(commonName: "Mac"),
+            peers: try PeerStore(url: temporaryDirectory().appending(path: "peers.json")),
+            configuration: .init(name: "Test Mac", port: fixed, advertise: false)
+        )
+        server.onListeningChanged = { states.append($0) }
+        defer { server.stop() }
+        #expect(try await server.start() == fixed)
+        server.failListenerForTesting()
+        try await eventually { states.values.count >= 2 }
+        #expect(states.values.first == .some(nil))
+        #expect(states.values.last == .some(fixed))
+    }
+
     @Test func stopBeforeReadyEndsStart() async throws {
         let server = DroidDropServer(
             identity: try Identity.generate(commonName: "Mac"),

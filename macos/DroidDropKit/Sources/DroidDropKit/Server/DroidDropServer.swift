@@ -46,6 +46,8 @@ public final class DroidDropServer: @unchecked Sendable {
     public var onConnectedPeersChanged: (([Peer]) -> Void)?
     /// After `start` succeeded: the port while listening again, nil while the listener is down and being restarted.
     public var onListeningChanged: ((UInt16?) -> Void)?
+    /// The listener is waiting (no usable network, Local Network access not granted). It starts by itself later.
+    public var onListenerWaiting: ((Error) -> Void)?
     public var onPeerPaired: ((Peer) -> Void)?
     public var onMessage: ((Peer, Message) -> Void)?
     /// An established (registered) session: peer fingerprint and the session's id for `send` / `sendChunk`.
@@ -65,6 +67,8 @@ public final class DroidDropServer: @unchecked Sendable {
     /// Between `start` and `stop`; a restart scheduled after `stop` does nothing.
     private var running = false
     private var listenerFailures = 0
+    /// The port the last ready listener had: a restart takes it again, because phones remember it.
+    private var lastPort: UInt16?
     private var connections: [ObjectIdentifier: FramedConnection] = [:]
     /// Remote host of each connection that is not an established session yet (`pendingPerHost`).
     private var pendingHosts: [ObjectIdentifier: String] = [:]
@@ -152,6 +156,7 @@ public final class DroidDropServer: @unchecked Sendable {
             self.accept(connection)
         }
         var completion = completion
+        var wasReady = false
         listener.stateUpdateHandler = { [weak self, weak listener] state in
             guard let self, let listener else {
                 completion?(.failure(CancellationError()))
@@ -168,7 +173,9 @@ public final class DroidDropServer: @unchecked Sendable {
             }
             switch state {
             case .ready:
+                wasReady = true
                 self.port = listener.port?.rawValue
+                self.lastPort = self.port
                 self.listenerFailures = 0
                 if let done = completion {
                     completion = nil
@@ -179,7 +186,7 @@ public final class DroidDropServer: @unchecked Sendable {
             case .failed(let error):
                 listener.cancel()
                 self.listener = nil
-                if port != 0 {
+                if port != 0 && !wasReady {
                     // Port taken (EADDRINUSE arrives as .failed): an OS-assigned one; pairing URIs carry it.
                     let handOver = completion
                     completion = nil  // this listener's .cancelled must not end `start`
@@ -190,8 +197,10 @@ public final class DroidDropServer: @unchecked Sendable {
                 } else {
                     self.listenerFailed()
                 }
-            case .waiting, .setup, .cancelled:
-                // .waiting: no usable network yet or the Local Network prompt is open; Network starts it later.
+            case .waiting(let error):
+                // No usable network yet, or Local Network access not granted: Network starts it when it can.
+                self.onListenerWaiting?(error)
+            case .setup, .cancelled:
                 break
             @unknown default:
                 break
@@ -213,17 +222,14 @@ public final class DroidDropServer: @unchecked Sendable {
         let delay = min(30, pow(2, Double(listenerFailures - 1)))
         queue.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, self.running, self.listener == nil else { return }
-            self.startListener(port: self.configuration.port, completion: nil)
+            self.startListener(port: self.lastPort ?? self.configuration.port, completion: nil)
         }
     }
 
-    /// Test hook: takes the post-ready failure path of the current listener.
+    /// Test hook: delivers `.failed` to the current listener's state handler, as Network does.
     func failListenerForTesting() {
         queue.async { [weak self] in
-            guard let self, let listener = self.listener else { return }
-            listener.cancel()
-            self.listener = nil
-            self.listenerFailed()
+            self?.listener?.stateUpdateHandler?(.failed(.posix(.ECONNABORTED)))
         }
     }
 
