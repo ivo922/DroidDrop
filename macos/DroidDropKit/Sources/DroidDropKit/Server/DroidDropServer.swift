@@ -11,12 +11,20 @@ public final class DroidDropServer: @unchecked Sendable {
         public var advertise: Bool
         /// Closes a connection after this long without receiving anything (SPEC §5 rule 5).
         public var idleTimeout: TimeInterval
+        /// Closes a connection that has not become an established session (TLS, hello, pairing) within this long.
+        public var handshakeTimeout: TimeInterval
+        /// Most connections one remote host may have that are not established sessions yet.
+        public var pendingPerHost: Int
 
-        public init(name: String, port: UInt16 = 47321, advertise: Bool = true, idleTimeout: TimeInterval = DroidDropServer.idleTimeout) {
+        public init(name: String, port: UInt16 = 47321, advertise: Bool = true, idleTimeout: TimeInterval = DroidDropServer.idleTimeout,
+                    handshakeTimeout: TimeInterval = DroidDropServer.handshakeTimeout,
+                    pendingPerHost: Int = DroidDropServer.pendingPerHost) {
             self.name = name
             self.port = port
             self.advertise = advertise
             self.idleTimeout = idleTimeout
+            self.handshakeTimeout = handshakeTimeout
+            self.pendingPerHost = pendingPerHost
         }
     }
 
@@ -28,6 +36,10 @@ public final class DroidDropServer: @unchecked Sendable {
 
     public static let serviceType = "_droiddrop._tcp"
     public static let idleTimeout: TimeInterval = 90
+    /// Pairing is a QR scan away from the connect, and a reconnect finishes in well under a second.
+    public static let handshakeTimeout: TimeInterval = 15
+    /// A phone opens one connection at a time; a few spare for reconnect overlap.
+    public static let pendingPerHost = 4
 
     public let queue = DispatchQueue(label: "dev.ivo.droiddrop.server")
     public let identity: Identity
@@ -49,6 +61,8 @@ public final class DroidDropServer: @unchecked Sendable {
     private var listener: NWListener?
     private var port: UInt16?
     private var connections: [ObjectIdentifier: FramedConnection] = [:]
+    /// Remote host of each connection that is not an established session yet (`pendingPerHost`).
+    private var pendingHosts: [ObjectIdentifier: String] = [:]
     private var sessions: [Data: Session] = [:]
     private var nextSessionID: UInt64 = 0
 
@@ -218,8 +232,14 @@ public final class DroidDropServer: @unchecked Sendable {
     // MARK: Sessions
 
     private func accept(_ connection: NWConnection) {
+        let host = Self.remoteHost(of: connection)
+        guard pendingHosts.values.filter({ $0 == host }).count < configuration.pendingPerHost else {
+            connection.cancel()
+            return
+        }
         let framed = FramedConnection(connection: connection, queue: queue)
         let id = ObjectIdentifier(framed)
+        pendingHosts[id] = host
         var session: Session?
         framed.onEvent = { [weak self, weak framed] event in
             switch event {
@@ -243,13 +263,23 @@ public final class DroidDropServer: @unchecked Sendable {
                 if let session { self?.unregister(session) }
                 session = nil
                 self?.connections[id] = nil
+                self?.pendingHosts[id] = nil
             }
         }
         connections[id] = framed
-        queue.asyncAfter(deadline: .now() + configuration.idleTimeout) { [weak framed] in
-            if session == nil { framed?.cancel() }
+        // Shorter than idleTimeout: an unauthenticated socket (no TLS, or an unpaired session in an open pairing
+        // window) must not be held for 90 s.
+        queue.asyncAfter(deadline: .now() + configuration.handshakeTimeout) { [weak self, weak framed] in
+            guard let self, let framed else { return }
+            if let session, self.sessions[session.fingerprint] === session { return }
+            framed.cancel()
         }
         framed.start()
+    }
+
+    private static func remoteHost(of connection: NWConnection) -> String {
+        if case .hostPort(let host, _) = connection.endpoint { return "\(host)" }
+        return "\(connection.endpoint)"
     }
 
     private func handle(_ frame: Frame, in session: Session) {
@@ -317,6 +347,7 @@ public final class DroidDropServer: @unchecked Sendable {
             onSessionEnded?(session.fingerprint)
         }
         sessions[session.fingerprint] = session
+        pendingHosts[ObjectIdentifier(session.framed)] = nil
         onConnectedPeersChanged?(currentConnectedPeers())
         onSessionStarted?(session.fingerprint, session.id)
     }

@@ -7,11 +7,14 @@ import Testing
 
     func makeServer(peersURL: URL = temporaryDirectory().appending(path: "peers.json"),
                     idleTimeout: TimeInterval = DroidDropServer.idleTimeout,
+                    handshakeTimeout: TimeInterval = DroidDropServer.handshakeTimeout,
+                    pendingPerHost: Int = DroidDropServer.pendingPerHost,
                     configure: (DroidDropServer) -> Void = { _ in }) async throws -> (DroidDropServer, UInt16) {
         let server = DroidDropServer(
             identity: try Identity.generate(commonName: "Mac"),
             peers: try PeerStore(url: peersURL),
-            configuration: .init(name: "Test Mac", port: 0, advertise: false, idleTimeout: idleTimeout)
+            configuration: .init(name: "Test Mac", port: 0, advertise: false, idleTimeout: idleTimeout,
+                                 handshakeTimeout: handshakeTimeout, pendingPerHost: pendingPerHost)
         )
         configure(server)
         return (server, try await server.start())
@@ -214,6 +217,53 @@ import Testing
         try await events.expectClosed()
         #expect(ContinuousClock.now - started < .seconds(3))
         #expect(server.connectedPeers().isEmpty)
+    }
+
+    // A LAN device that opens sockets and never finishes TLS must not hold them for the 90 s idle timeout.
+    @Test func silentConnectionIsClosedAfterHandshakeTimeout() async throws {
+        let (server, port) = try await makeServer(handshakeTimeout: 0.5)
+        defer { server.stop() }
+        let raw = RawClient(port: port)
+        defer { raw.cancel() }
+        try await eventually(timeout: 3) { raw.closed }
+    }
+
+    @Test func unpairedSessionIsClosedAfterHandshakeTimeout() async throws {
+        let (server, port) = try await makeServer(handshakeTimeout: 0.5)
+        defer { server.stop() }
+        _ = server.openPairingWindow(hosts: ["127.0.0.1"])
+        let (_, events) = try TestClient.connect(port: port, identity: phone, pinnedServer: server.identity.fingerprint)
+        #expect(try await events.nextMessage() == .hello(v: 1, name: "Test Mac", platform: .macos))
+        let started = ContinuousClock.now
+        try await events.expectClosed()
+        #expect(ContinuousClock.now - started < .seconds(3))
+    }
+
+    // One device cannot take more than `pendingPerHost` unauthenticated sockets, so it cannot lock out the phone's.
+    @Test func pendingConnectionsPerHostAreCapped() async throws {
+        let (server, port) = try await makeServer(handshakeTimeout: 30, pendingPerHost: 2)
+        defer { server.stop() }
+        let first = RawClient(port: port)
+        let second = RawClient(port: port)
+        defer { first.cancel(); second.cancel() }
+        try await Task.sleep(for: .milliseconds(300))
+        let third = RawClient(port: port)
+        defer { third.cancel() }
+        try await eventually(timeout: 3) { third.closed }
+        #expect(!first.closed)
+        #expect(!second.closed)
+    }
+
+    @Test func pairedSessionDoesNotCountAsPending() async throws {
+        let (server, port) = try await makeServer(handshakeTimeout: 30, pendingPerHost: 1)
+        defer { server.stop() }
+        let (connection, events) = try await pair(server, port: port)
+        connection.send(.ping(id: 1))
+        #expect(try await events.nextMessage() == .pong(id: 1))
+        let raw = RawClient(port: port)
+        defer { raw.cancel() }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(!raw.closed)
     }
 
     // MARK: Sessions and chunks
