@@ -172,6 +172,45 @@ import Testing
         #expect(secondSha == sha256)
     }
 
+    /// SPEC §5 rule 6: a new session replaces the old one. Frames the old session's sender still produces must not
+    /// reach the new connection (Android drops a session that gets a chunk before its pong).
+    @Test func replacedSessionsFramesNeverReachTheNewSession() async throws {
+        let h = try await start()
+        defer { h.server.stop() }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appending(path: "big.bin")
+        try Data((0..<(8 * FrameLimits.maxChunkData)).map { UInt8(truncatingIfNeeded: $0 &* 7) }).write(to: url)
+
+        h.transfers.send([url], to: base.phone.fingerprint)
+        guard case let .fileOffer(oldId, _, _, _, _) = try await h.events.nextMessage() else {
+            throw UnexpectedEvent(description: "expected file_offer")
+        }
+        // Hold the transfers queue so the old session's accept is handled (and its chunks pumped) only after the new
+        // session has registered: the order a slow queue or a large file produces on a real network.
+        let gate = DispatchSemaphore(value: 0)
+        h.transfers.queue.async { gate.wait() }
+        h.connection.send(.fileAccept(transferId: oldId, offset: 0))
+        try await Task.sleep(for: .milliseconds(100))
+        let (connection, events) = try await base.reconnect(h.server, port: h.port)
+        connection.send(.ping(id: 1))
+        #expect(try await events.nextMessage() == .pong(id: 1))  // the server has registered the new session
+        gate.signal()
+
+        var sawOldFrame = false
+        while let event = try? await events.next(timeout: 1) {
+            guard case .frame(let frame) = event else { continue }
+            switch frame {
+            case .chunk(let id, _, _): if id == oldId { sawOldFrame = true }
+            case .control(let data):
+                switch try MessageCodec.decode(data) {
+                case .fileDone(let id), .fileCancel(let id): if id == oldId { sawOldFrame = true }
+                default: break
+                }
+            }
+        }
+        #expect(!sawOldFrame)
+    }
+
     /// "Pair Again" leaves a queue for a fingerprint that is no longer paired; cancelling must still clear it.
     @Test func cancelAllSendingDropsQueuesOfUnpairedPeers() async throws {
         let h = try await start()

@@ -20,6 +20,12 @@ public final class DroidDropServer: @unchecked Sendable {
         }
     }
 
+    /// One established session. A peer's next session gets a new one, so frames meant for a replaced session
+    /// can be dropped instead of reaching its successor (SPEC §5 rule 6).
+    public struct SessionID: Hashable, Sendable {
+        fileprivate let value: UInt64
+    }
+
     public static let serviceType = "_droiddrop._tcp"
     public static let idleTimeout: TimeInterval = 90
 
@@ -28,8 +34,8 @@ public final class DroidDropServer: @unchecked Sendable {
     public var onConnectedPeersChanged: (([Peer]) -> Void)?
     public var onPeerPaired: ((Peer) -> Void)?
     public var onMessage: ((Peer, Message) -> Void)?
-    /// An established (registered) session, keyed by peer fingerprint.
-    public var onSessionStarted: ((Data) -> Void)?
+    /// An established (registered) session: peer fingerprint and the session's id for `send` / `sendChunk`.
+    public var onSessionStarted: ((Data, SessionID) -> Void)?
     /// Also fired for a session replaced by a newer one, before the newer one's onSessionStarted.
     public var onSessionEnded: ((Data) -> Void)?
     /// Chunk from an established session: fingerprint, transferId, offset, data.
@@ -44,15 +50,18 @@ public final class DroidDropServer: @unchecked Sendable {
     private var port: UInt16?
     private var connections: [ObjectIdentifier: FramedConnection] = [:]
     private var sessions: [Data: Session] = [:]
+    private var nextSessionID: UInt64 = 0
 
     private final class Session {
+        let id: SessionID
         let framed: FramedConnection
         let fingerprint: Data
         var machine: ServerSession
         var lastReceived = ContinuousClock.now
         var watchdog: DispatchSourceTimer?
 
-        init(framed: FramedConnection, fingerprint: Data, machine: ServerSession) {
+        init(id: SessionID, framed: FramedConnection, fingerprint: Data, machine: ServerSession) {
+            self.id = id
             self.framed = framed
             self.fingerprint = fingerprint
             self.machine = machine
@@ -185,16 +194,18 @@ public final class DroidDropServer: @unchecked Sendable {
         }
     }
 
-    public func send(_ message: Message, to fingerprint: Data) {
-        queue.async { [weak self] in self?.sessions[fingerprint]?.framed.send(message) }
+    /// Sends to the established session of `fingerprint`; with `session`, only while that session is still it.
+    public func send(_ message: Message, to fingerprint: Data, session: SessionID? = nil) {
+        queue.async { [weak self] in self?.established(fingerprint, session)?.framed.send(message) }
     }
 
-    /// Sends a chunk to the established session of `fingerprint`; `completion(false)` when there is none. Safe from any thread.
-    /// Frames sent through `send(_:to:)` and here leave in call order. `completion` runs on `queue`.
-    public func sendChunk(transferId: String, offset: UInt64, data: Data, to fingerprint: Data,
+    /// Sends a chunk to the established session of `fingerprint` (with `session`, only to that one);
+    /// `completion(false)` when there is none. Safe from any thread.
+    /// Frames sent through `send(_:to:session:)` and here leave in call order. `completion` runs on `queue`.
+    public func sendChunk(transferId: String, offset: UInt64, data: Data, to fingerprint: Data, session id: SessionID? = nil,
                           completion: @escaping @Sendable (Bool) -> Void) {
         queue.async { [weak self] in
-            guard let session = self?.sessions[fingerprint] else { return completion(false) }
+            guard let session = self?.established(fingerprint, id) else { return completion(false) }
             session.framed.send(.chunk(transferId: transferId, offset: offset, data: data), completion: completion)
         }
     }
@@ -219,7 +230,9 @@ public final class DroidDropServer: @unchecked Sendable {
                 }
                 let machine = ServerSession(serverFingerprint: self.identity.fingerprint, clientFingerprint: fingerprint,
                                             alreadyPaired: self.peers.contains(fingerprint))
-                let newSession = Session(framed: framed, fingerprint: fingerprint, machine: machine)
+                self.nextSessionID += 1
+                let newSession = Session(id: SessionID(value: self.nextSessionID), framed: framed,
+                                         fingerprint: fingerprint, machine: machine)
                 session = newSession
                 framed.send(.hello(v: 1, name: self.configuration.name, platform: .macos))
                 self.startWatchdog(for: newSession)
@@ -305,7 +318,7 @@ public final class DroidDropServer: @unchecked Sendable {
         }
         sessions[session.fingerprint] = session
         onConnectedPeersChanged?(currentConnectedPeers())
-        onSessionStarted?(session.fingerprint)
+        onSessionStarted?(session.fingerprint, session.id)
     }
 
     private func unregister(_ session: Session) {
@@ -313,6 +326,11 @@ public final class DroidDropServer: @unchecked Sendable {
         sessions[session.fingerprint] = nil
         onConnectedPeersChanged?(currentConnectedPeers())
         onSessionEnded?(session.fingerprint)
+    }
+
+    private func established(_ fingerprint: Data, _ id: SessionID?) -> Session? {
+        guard let session = sessions[fingerprint], id == nil || session.id == id else { return nil }
+        return session
     }
 
     private func currentConnectedPeers() -> [Peer] {

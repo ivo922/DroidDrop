@@ -221,7 +221,7 @@ import Testing
     @Test func reportsSessionStartAndEnd() async throws {
         let log = Recorded<String>()
         let (server, port) = try await makeServer { server in
-            server.onSessionStarted = { _ in log.append("start") }
+            server.onSessionStarted = { _, _ in log.append("start") }
             server.onSessionEnded = { _ in log.append("end") }
         }
         defer { server.stop() }
@@ -235,7 +235,7 @@ import Testing
     @Test func replacedSessionEndsBeforeNewOneStarts() async throws {
         let log = Recorded<String>()
         let (server, port) = try await makeServer { server in
-            server.onSessionStarted = { _ in log.append("start") }
+            server.onSessionStarted = { _, _ in log.append("start") }
             server.onSessionEnded = { _ in log.append("end") }
         }
         defer { server.stop() }
