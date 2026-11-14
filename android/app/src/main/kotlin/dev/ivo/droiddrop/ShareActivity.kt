@@ -20,6 +20,7 @@ class ShareActivity : ComponentActivity() {
             return
         }
         // The activity stays until the files are open: the share's URI grant lasts as long as it does (R9).
+        // The manifest's configChanges keep a rotation from recreating it, which would queue the files twice.
         OutgoingFiles.send(this, sharedUris(intent), onDone = ::finish)
     }
 
