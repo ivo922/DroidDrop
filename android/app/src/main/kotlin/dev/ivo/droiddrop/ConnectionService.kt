@@ -297,6 +297,8 @@ class ConnectionService : Service() {
         override fun onPaired(serverName: String) = onPaired(serverName)
 
         override fun onConnected(serverName: String, sender: MessageSender) {
+            // Not only in onCreate: the service runs for weeks. Here, on the reader thread, no offer can race it.
+            runCatching { partials.prune() }
             onConnected()
             transfers.connected(sender)
             Clips.link.attach(sender)

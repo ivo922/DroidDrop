@@ -39,7 +39,8 @@ public final class FileTransfers: @unchecked Sendable {
     private var reportedAt = DispatchTime.now()
     private var flushScheduled = false
 
-    /// Sets server.onSessionStarted/onSessionEnded/onChunk (not onMessage) and prunes partials. Holds the server weakly.
+    /// Sets server.onSessionStarted/onSessionEnded/onChunk (not onMessage) and prunes partials (now and at each session start).
+    /// Holds the server weakly.
     /// Call before the server starts.
     public init(server: DroidDropServer, partials: PartialStore, destination: URL) {
         self.server = server
@@ -92,6 +93,8 @@ public final class FileTransfers: @unchecked Sendable {
     // MARK: - On queue
 
     private func sessionStarted(_ fingerprint: Data) {
+        // Also here, not only at launch: a Launch-at-Login app runs for weeks. Active partials have a fresh mtime.
+        partials.prune()
         receivers[fingerprint]?.close()
         receivers[fingerprint] = FileReceiver(partials: partials, destination: destination)
         let link = Link(fingerprint: fingerprint, server: server, owner: self)

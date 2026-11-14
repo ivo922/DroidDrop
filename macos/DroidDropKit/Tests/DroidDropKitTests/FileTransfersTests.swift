@@ -47,6 +47,21 @@ import Testing
         }
     }
 
+    @Test func stalePartialsArePrunedWhenASessionStarts() async throws {
+        // The app runs for weeks at login: pruning only at launch would let abandoned partials pile up.
+        let h = try await start()
+        defer { h.server.stop() }
+        let partials = directory.appending(path: "partials")
+        try FileManager.default.createDirectory(at: partials, withIntermediateDirectories: true)
+        let stale = partials.appending(path: String(repeating: "a", count: 64) + "-10.part")
+        try Data(count: 10).write(to: stale)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-8 * 86_400)], ofItemAtPath: stale.path)
+
+        _ = try await reconnect(h)
+        h.transfers.queue.sync {}
+        #expect(!FileManager.default.fileExists(atPath: stale.path))
+    }
+
     @Test func phoneFileLandsInDestination() async throws {
         let h = try await start()
         defer { h.server.stop() }
