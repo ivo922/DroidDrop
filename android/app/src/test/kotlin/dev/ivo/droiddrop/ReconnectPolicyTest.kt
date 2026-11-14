@@ -175,6 +175,15 @@ class ReconnectPolicyTest {
     }
 
     @Test
+    fun alreadyPairedIsRecognizedOnlyByItsCode() {
+        val already = ProtocolException(ProtocolException.ALREADY_PAIRED, "server closed after pair_request")
+        assertTrue(ReconnectPolicy.alreadyPaired(already))
+        assertTrue(ReconnectPolicy.alreadyPaired(IOException("wrapped", already)))
+        assertFalse(ReconnectPolicy.alreadyPaired(ProtocolException(ProtocolException.SESSION_CLOSED, "pairing rejected")))
+        assertFalse(ReconnectPolicy.alreadyPaired(SocketException("Connection reset")))
+    }
+
+    @Test
     fun deviceNameIsNeverBlank() {
         assertEquals("Pixel", ReconnectPolicy.deviceName("Pixel", "sdk"))
         assertEquals("sdk", ReconnectPolicy.deviceName(null, "sdk"))

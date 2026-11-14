@@ -160,7 +160,7 @@ class ConnectionService : Service() {
         ConnectionStatus.state.value = ConnectionState.Pairing(uri.name)
         val fingerprint = Base64Url.decode32(uri.fingerprint)!!
         val secret = Base64Url.decode32(uri.secret)!!
-            var lastError: Exception? = null
+        var lastError: Exception? = null
         var sawPinMismatch = false
         for (host in uri.hosts) {
             var paired = false
@@ -177,7 +177,12 @@ class ConnectionService : Service() {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (ReconnectPolicy.classify(e) == ReconnectPolicy.FailureKind.PinMismatch) {
+                if (ReconnectPolicy.alreadyPaired(e)) {
+                    // Keep the QR's fresh addresses: they are why the user scanned it again.
+                    store.save(PairedMac(uri.name, uri.fingerprint, uri.hosts, uri.port))
+                    store.rememberAddress(host, uri.port)
+                    paired = true
+                } else if (ReconnectPolicy.classify(e) == ReconnectPolicy.FailureKind.PinMismatch) {
                     sawPinMismatch = true
                     Log.w(TAG, "pairing via $host rejected the pinned certificate", e)
                 } else {

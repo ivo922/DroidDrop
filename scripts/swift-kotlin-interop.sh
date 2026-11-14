@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pair Kotlin devcli with the Swift droiddrop-server, connect --ping, round-trip a file each way, then send a clip.
+# Pair Kotlin devcli with the Swift droiddrop-server, connect --ping, round-trip a file each way, send a clip, then pair again.
 # Builds first, then starts the server with stdin on a FIFO (fd 3) so this script can type commands.
 # The server stays up after stdin EOF, so this script kills it.
 set -euo pipefail
@@ -199,4 +199,22 @@ if ! grep -E '^MESSAGE devcli .*"type":"clip"' "$WORK/server.log" | grep -qF '"t
     exit 1
 fi
 echo "clip received"
+
+echo "== devcli pair again (server still trusts devcli) =="
+echo "pair" >&3
+for _ in $(seq 1 50); do
+    (( $(grep -c 'PAIR_URI ' "$WORK/server.log") >= 2 )) && break
+    sleep 0.2
+done
+uri2="$(grep -oE 'droiddrop://[^[:space:]]+' "$WORK/server.log" | sed -n 2p)"
+if [[ -z "$uri2" ]]; then
+    echo "no second PAIR_URI" >&2
+    exit 1
+fi
+repair_out="$("$DEVCLI" pair "$uri2")"
+printf '%s\n' "$repair_out"
+if [[ "$repair_out" != "ALREADY_PAIRED droiddrop-server" ]]; then
+    echo "unexpected pair-again output" >&2
+    exit 1
+fi
 echo "INTEROP OK"

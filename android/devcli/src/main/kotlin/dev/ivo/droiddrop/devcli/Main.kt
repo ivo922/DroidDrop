@@ -6,6 +6,7 @@ import dev.ivo.droiddrop.core.pairing.PairUri
 import dev.ivo.droiddrop.core.protocol.Frame
 import dev.ivo.droiddrop.core.protocol.Message
 import dev.ivo.droiddrop.core.protocol.MessageCodec
+import dev.ivo.droiddrop.core.protocol.ProtocolException
 import dev.ivo.droiddrop.core.session.DroidDropClient
 import dev.ivo.droiddrop.core.session.MessageSender
 import dev.ivo.droiddrop.core.session.SessionListener
@@ -85,6 +86,14 @@ private fun pair(client: DroidDropClient, home: File, uriText: String) {
                 })
             }
         } catch (e: Done) {
+            return
+        } catch (e: ProtocolException) {
+            if (e.code != ProtocolException.ALREADY_PAIRED) {
+                println("ERROR $host: ${e.message}")
+                continue
+            }
+            saveServer(home, SavedServer(uri.name, uri.fingerprint, host, uri.port))
+            println("ALREADY_PAIRED ${uri.name}")
             return
         } catch (e: Exception) {
             println("ERROR $host: ${e.message}")

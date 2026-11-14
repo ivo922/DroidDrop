@@ -3,6 +3,7 @@ package dev.ivo.droiddrop.core.session
 import dev.ivo.droiddrop.core.pairing.Base64Url
 import dev.ivo.droiddrop.core.pairing.Pairing
 import dev.ivo.droiddrop.core.protocol.Message
+import dev.ivo.droiddrop.core.protocol.ProtocolException
 import java.util.concurrent.atomic.AtomicLong
 
 sealed interface ClientAction {
@@ -10,7 +11,7 @@ sealed interface ClientAction {
     data class Paired(val serverName: String) : ClientAction
     data class Connected(val serverName: String) : ClientAction
     data class Deliver(val message: Message) : ClientAction
-    data class Close(val reason: String) : ClientAction
+    data class Close(val reason: String, val code: String = ProtocolException.SESSION_CLOSED) : ClientAction
 }
 
 /**
@@ -65,6 +66,9 @@ class ClientSession(
     fun endOfStream(): List<ClientAction> = when (phase) {
         Phase.READY -> emptyList<ClientAction>().also { phase = Phase.CLOSED }
         Phase.CLOSED -> emptyList()
+        // A server rejects a bad proof or a closed window with pair_result; it closes silently only on a client it
+        // already trusts (a paired session may not send pair_request).
+        Phase.AWAITING_PAIR_RESULT -> close("server closed after pair_request: it already trusts this phone", ProtocolException.ALREADY_PAIRED)
         else -> close("server closed before session was established")
     }
 
@@ -112,9 +116,9 @@ class ClientSession(
         else -> listOf(ClientAction.Deliver(message))
     }
 
-    private fun close(reason: String): List<ClientAction> {
+    private fun close(reason: String, code: String = ProtocolException.SESSION_CLOSED): List<ClientAction> {
         phase = Phase.CLOSED
         held.clear()
-        return listOf(ClientAction.Close(reason))
+        return listOf(ClientAction.Close(reason, code))
     }
 }

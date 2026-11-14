@@ -30,6 +30,10 @@ internal object ReconnectPolicy {
         return FailureKind.Retry
     }
 
+    /** Pairing reached a Mac that already trusts this identity ("Pair again" while still paired): treat it as paired. */
+    fun alreadyPaired(error: Throwable): Boolean =
+        generateSequence(error) { it.cause }.any { it is ProtocolException && it.code == ProtocolException.ALREADY_PAIRED }
+
     /** SPEC §4.1 hello name is non-empty. Global device name, then model, then "Android". */
     fun deviceName(global: String?, model: String?): String =
         listOf(global, model).firstNotNullOfOrNull { it?.trim()?.takeIf(String::isNotEmpty) } ?: "Android"

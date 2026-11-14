@@ -3,6 +3,7 @@ package dev.ivo.droiddrop.core
 import dev.ivo.droiddrop.core.pairing.Base64Url
 import dev.ivo.droiddrop.core.pairing.Pairing
 import dev.ivo.droiddrop.core.protocol.Message
+import dev.ivo.droiddrop.core.protocol.ProtocolException
 import dev.ivo.droiddrop.core.protocol.Platform
 import dev.ivo.droiddrop.core.session.ClientAction
 import dev.ivo.droiddrop.core.session.ClientSession
@@ -107,10 +108,19 @@ class ClientSessionTest {
     }
 
     @Test
-    fun serverCloseDuringPairingCloses() {
+    fun serverCloseAfterPairRequestMeansAlreadyPaired() {
+        // A server that already trusts this identity closes on pair_request without a pair_result (SPEC §5 rule 4).
         val session = started(secret)
         session.receive(hello)
-        assertEquals(listOf(ClientAction.Close("server closed before session was established")), session.endOfStream())
+        assertEquals(
+            listOf(ClientAction.Close("server closed after pair_request: it already trusts this phone", ProtocolException.ALREADY_PAIRED)),
+            session.endOfStream(),
+        )
+    }
+
+    @Test
+    fun otherClosesKeepTheSessionClosedCode() {
+        assertEquals(ProtocolException.SESSION_CLOSED, ClientAction.Close("x").code)
     }
 
     @Test
