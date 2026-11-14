@@ -6,6 +6,10 @@ Android ↔ macOS file transfer and clipboard sync over the local network.
 - Wire protocol: [`protocol/SPEC.md`](protocol/SPEC.md), conformance fixtures in [`protocol/fixtures/`](protocol/fixtures/)
 - Plans: [`docs/superpowers/plans/`](docs/superpowers/plans/)
 
+## Verify
+
+`scripts/check.sh` runs every gate: Swift tests, Android unit tests, lint, builds and the Swift ↔ Kotlin interop.
+
 ## Layout
 
 | Path | What |
