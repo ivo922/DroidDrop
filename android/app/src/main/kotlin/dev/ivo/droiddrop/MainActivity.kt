@@ -91,8 +91,9 @@ class MainActivity : ComponentActivity() {
                 var phoneCode by remember { mutableStateOf("…") }
                 LaunchedEffect(generation) {
                     AndroidIdentity.awaitPendingDelete()
+                    // A keystore error must not crash the screen; the service reports it as Failed.
                     val code = withContext(Dispatchers.IO) {
-                        Pairing.displayCode(AndroidIdentity.loadOrCreate().fingerprint)
+                        runCatching { Pairing.displayCode(AndroidIdentity.loadOrCreate().fingerprint) }.getOrDefault("unavailable")
                     }
                     ensureActive()
                     phoneCode = code

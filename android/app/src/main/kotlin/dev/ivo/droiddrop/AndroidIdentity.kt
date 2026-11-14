@@ -15,7 +15,6 @@ import kotlinx.coroutines.launch
 import java.math.BigInteger
 import java.security.KeyPairGenerator
 import java.security.KeyStore
-import java.security.cert.X509Certificate
 import java.security.spec.ECGenParameterSpec
 import java.util.Date
 import javax.security.auth.x500.X500Principal
@@ -40,30 +39,20 @@ object AndroidIdentity {
         if (Looper.getMainLooper() == Looper.myLooper()) {
             Log.e(TAG, "loadOrCreate called on the main thread")
         }
-        val keyStore = KeyStore.getInstance(PROVIDER).apply { load(null) }
-        if (keyStore.containsAlias(ALIAS)) {
-            val existing = try {
-                validIdentity(keyStore)
-            } catch (e: Exception) {
-                Log.w(TAG, "stored identity is unreadable", e)
-                null
-            }
-            if (existing != null) return existing
-            Log.w(TAG, "deleting unusable keystore entry $ALIAS")
-            keyStore.deleteEntry(ALIAS)
+        val loaded = IdentityEntries.loadOrReplace({ KeyStore.getInstance(PROVIDER).apply { load(null) } }, ALIAS) {
+            val now = System.currentTimeMillis()
+            val spec = KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_SIGN)
+                .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
+                .setDigests(KeyProperties.DIGEST_NONE, KeyProperties.DIGEST_SHA256)
+                .setCertificateSubject(X500Principal("CN=DroidDrop Android"))
+                .setCertificateSerialNumber(BigInteger.valueOf(now))
+                .setCertificateNotBefore(Date(now - 86_400_000L))
+                .setCertificateNotAfter(Date(now + 20L * 365 * 86_400_000L))
+                .build()
+            KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, PROVIDER).apply { initialize(spec) }.generateKeyPair()
         }
-        val now = System.currentTimeMillis()
-        val spec = KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_SIGN)
-            .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
-            .setDigests(KeyProperties.DIGEST_NONE, KeyProperties.DIGEST_SHA256)
-            .setCertificateSubject(X500Principal("CN=DroidDrop Android"))
-            .setCertificateSerialNumber(BigInteger.valueOf(now))
-            .setCertificateNotBefore(Date(now - 86_400_000L))
-            .setCertificateNotAfter(Date(now + 20L * 365 * 86_400_000L))
-            .build()
-        KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, PROVIDER).apply { initialize(spec) }.generateKeyPair()
-        val refreshed = KeyStore.getInstance(PROVIDER).apply { load(null) }
-        return validIdentity(refreshed) ?: error("AndroidKeyStore did not produce a usable identity")
+        if (loaded.replaced) Log.w(TAG, "replaced unusable keystore entry $ALIAS")
+        return loaded.identity
     }
 
     /** Removes `droiddrop-identity` so the next [loadOrCreate] mints a new fingerprint. */
@@ -85,11 +74,5 @@ object AndroidIdentity {
 
     suspend fun awaitPendingDelete() {
         pendingDelete?.join()
-    }
-
-    private fun validIdentity(keyStore: KeyStore): DeviceIdentity? {
-        val entry = keyStore.getEntry(ALIAS, null) as? KeyStore.PrivateKeyEntry ?: return null
-        val certificate = entry.certificate as? X509Certificate ?: return null
-        return DeviceIdentity(entry.privateKey, certificate)
     }
 }

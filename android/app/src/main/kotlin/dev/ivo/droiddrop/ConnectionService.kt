@@ -19,6 +19,7 @@ import dev.ivo.droiddrop.core.protocol.Message
 import dev.ivo.droiddrop.core.session.DroidDropClient
 import dev.ivo.droiddrop.core.session.MessageSender
 import dev.ivo.droiddrop.core.session.SessionListener
+import dev.ivo.droiddrop.core.tls.DeviceIdentity
 import dev.ivo.droiddrop.core.transfer.FileReceiver
 import dev.ivo.droiddrop.core.transfer.PartialStore
 import java.io.File
@@ -107,7 +108,7 @@ class ConnectionService : Service() {
             loop = scope.launch {
                 loopMutex.withLock {
                     AndroidIdentity.awaitPendingDelete()
-                    val identity = withContext(Dispatchers.IO) { AndroidIdentity.loadOrCreate() }
+                    val identity = loadIdentity()
                     currentCoroutineContext().ensureActive()
                     val client = DroidDropClient(identity, deviceName())
                     // pair() blocks in client.run until that session ends. A failed first pair
@@ -134,6 +135,26 @@ class ConnectionService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /**
+     * Retries with backoff instead of throwing: the service scope has no exception handler, so a keystore error
+     * would crash the process, and START_STICKY would crash-loop it.
+     */
+    private suspend fun loadIdentity(): DeviceIdentity {
+        var backoff = INITIAL_BACKOFF_MILLIS
+        while (true) {
+            try {
+                return withContext(Dispatchers.IO) { AndroidIdentity.loadOrCreate() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "could not load the identity", e)
+                ConnectionStatus.state.value = ConnectionState.Failed("Could not load this phone's identity. Retrying…")
+                delay(backoff)
+                backoff = (backoff * 2).coerceAtMost(MAX_BACKOFF_MILLIS)
+            }
+        }
+    }
 
     /** Pairs and then keeps that session as the live connection. Returns false if pairing failed. */
     private suspend fun pair(client: DroidDropClient, uri: PairUri): Boolean {
