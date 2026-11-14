@@ -325,7 +325,7 @@ import Testing
         let first = RawClient(port: port)
         let second = RawClient(port: port)
         defer { first.cancel(); second.cancel() }
-        try await Task.sleep(for: .milliseconds(300))
+        try await eventually { server.pendingCountForTesting() == 2 }
         let third = RawClient(port: port)
         defer { third.cancel() }
         try await eventually(timeout: 3) { third.closed }

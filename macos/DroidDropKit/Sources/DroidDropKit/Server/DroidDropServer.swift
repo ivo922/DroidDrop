@@ -226,6 +226,11 @@ public final class DroidDropServer: @unchecked Sendable {
         }
     }
 
+    /// Test hook: connections that are not established sessions yet.
+    func pendingCountForTesting() -> Int {
+        queue.sync { pendingHosts.count }
+    }
+
     /// Test hook: delivers `.failed` to the current listener's state handler, as Network does.
     func failListenerForTesting() {
         queue.async { [weak self] in
