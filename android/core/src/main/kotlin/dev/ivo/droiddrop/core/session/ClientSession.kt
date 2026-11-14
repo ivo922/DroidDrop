@@ -87,7 +87,12 @@ class ClientSession(
     }
 
     private fun onPairResult(message: Message): List<ClientAction> {
-        if (message !is Message.PairResult) return close("expected pair_result")
+        if (message is Message.Hello) return close("expected pair_result")
+        // SPEC §5 rule 4: only a server that already trusts this identity sends session messages (it may push a queued
+        // file_offer or a clip right after hello, before it reads our pair_request).
+        if (message !is Message.PairResult) {
+            return close("server sent ${message::class.simpleName} before pair_result: it already trusts this phone", ProtocolException.ALREADY_PAIRED)
+        }
         if (!message.ok) return close("pairing rejected: ${message.reason ?: "no reason given"}")
         val proof = message.proof?.let(Base64Url::decode32)
         if (proof == null || !Pairing.isValidServerProof(proof, pairingSecret!!, serverFingerprint, clientFingerprint)) {

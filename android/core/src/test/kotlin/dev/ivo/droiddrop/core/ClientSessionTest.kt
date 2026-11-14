@@ -153,17 +153,28 @@ class ClientSessionTest {
     }
 
     @Test
-    fun otherMessageDuringPairingCloses() {
+    fun sessionMessageDuringPairingMeansAlreadyPaired() {
+        // SPEC §5 rule 4: a server sends session messages only to a client it already trusts (it registered us on
+        // hello and may push a queued file_offer or a clip before it reads our pair_request).
         val session = started(secret)
         session.receive(hello)
-        assertEquals(listOf(ClientAction.Close("expected pair_result")), session.receive(clip))
+        val actions = session.receive(clip)
+        assertEquals(1, actions.size)
+        assertEquals(ProtocolException.ALREADY_PAIRED, (actions.single() as ClientAction.Close).code)
     }
 
     @Test
-    fun pingDuringPairingCloses() {
+    fun helloAgainDuringPairingIsAProtocolError() {
         val session = started(secret)
         session.receive(hello)
-        assertEquals(listOf(ClientAction.Close("expected pair_result")), session.receive(Message.Ping(1)))
+        assertEquals(listOf(ClientAction.Close("expected pair_result")), session.receive(hello))
+    }
+
+    @Test
+    fun pingDuringPairingMeansAlreadyPaired() {
+        val session = started(secret)
+        session.receive(hello)
+        assertEquals(ProtocolException.ALREADY_PAIRED, (session.receive(Message.Ping(1)).single() as ClientAction.Close).code)
     }
 
     @Test

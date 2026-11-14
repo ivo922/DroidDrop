@@ -137,6 +137,7 @@ Labels are ASCII; fingerprints are the raw 32 bytes. Proofs are sent as b64url32
 1. Client scans the URI, connects to any listed host (trying them in order) pinning `fp`, exchanges `hello`, sends `pair_request{proof: client_proof}`.
 2. Server: if no pairing window is open → `pair_result{ok:false, reason:"window_closed"}` and close. If the proof does not match (constant-time compare) → `pair_result{ok:false, reason:"bad_proof"}` and close. Otherwise it stores the client fingerprint with the client's `hello.name`, closes the window, replies `pair_result{ok:true, proof: server_proof}`, and the session continues as paired.
 3. Client verifies `server_proof` (constant-time). On mismatch it closes and discards. Otherwise it stores the server fingerprint, name, port and hosts.
+4. **Already paired** (informative): a server that already trusts the client treats the session as paired (§5 rule 4), so it may send session messages right after `hello`, and it closes without `pair_result` when the `pair_request` arrives (rule 4: `pair_request` in a paired session is a protocol error). A client waiting for `pair_result` treats either — a close without `pair_result`, or any message other than `pair_result`, `hello` or an unknown type — as "already paired": it stores the server as in step 3 and continues with a normal paired session.
 
 ## 7. Discovery
 
