@@ -1,6 +1,7 @@
 package dev.ivo.droiddrop
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -11,9 +12,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -30,12 +33,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import dev.ivo.droiddrop.core.pairing.Pairing
 import dev.ivo.droiddrop.core.pairing.PairUri
+import dev.ivo.droiddrop.core.transfer.TransferOutcome
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
@@ -48,6 +55,7 @@ class MainActivity : ComponentActivity() {
     private var scanAfterLocalNetworkGrant = false
     private var permissionRequestOpen = false
     private lateinit var store: PairingStore
+    private var received by mutableStateOf(emptyList<ReceivedFile>())
     private val clipboard by lazy { getSystemService(ClipboardManager::class.java) }
 
     // Only a focused app may read the clipboard, so automatic sends run only while this screen is in front.
@@ -106,13 +114,22 @@ class MainActivity : ComponentActivity() {
                     onSendFiles = { filePicker.launch(arrayOf("*/*")) },
                     onUnpair = ::unpair,
                     onAllowBackground = ::requestBatteryExemption,
+                    received = received,
+                    onOpen = ::openReceived,
                 )
+            }
+        }
+        // The list follows Download/DroidDrop/: refreshed on resume and whenever a file arrives.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                Transfers.received.collect { if (it is TransferOutcome.Received) refreshReceived() }
             }
         }
     }
 
     override fun onResume() {
         super.onResume()
+        refreshReceived()
         clipboard.addPrimaryClipChangedListener(clipListener)
         if (LocalNetwork.allowed(this)) {
             resumeSavedConnection()
@@ -186,6 +203,18 @@ class MainActivity : ComponentActivity() {
         AndroidIdentity.enqueueDelete()
     }
 
+    private fun refreshReceived() {
+        lifecycleScope.launch { received = withContext(Dispatchers.IO) { ReceivedFiles.query(this@MainActivity) } }
+    }
+
+    private fun openReceived(file: ReceivedFile) {
+        try {
+            startActivity(FileViewer.intent(this, file.uri))
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(this, "No app can open ${file.name}.", Toast.LENGTH_LONG).show()
+        }
+    }
+
     private fun requestBatteryExemption() {
         startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, "package:$packageName".toUri()))
     }
@@ -200,25 +229,38 @@ private fun MainScreen(
     onSendFiles: () -> Unit,
     onUnpair: () -> Unit,
     onAllowBackground: () -> Unit,
+    received: List<ReceivedFile>,
+    onOpen: (ReceivedFile) -> Unit,
 ) {
     Scaffold { padding ->
-        Column(
-            modifier = Modifier.padding(padding).padding(24.dp).fillMaxSize(),
+        LazyColumn(
+            modifier = Modifier.padding(padding).fillMaxSize(),
+            contentPadding = PaddingValues(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text("DroidDrop", style = MaterialTheme.typography.headlineMedium)
-            Text(state.describe(), style = MaterialTheme.typography.titleMedium)
+            item { Text("DroidDrop", style = MaterialTheme.typography.headlineMedium) }
+            item { Text(state.describe(), style = MaterialTheme.typography.titleMedium) }
             if (!paired || state is ConnectionState.Failed) {
-                Button(onClick = onPair) { Text(if (paired) "Pair again" else "Pair with Mac") }
+                item { Button(onClick = onPair) { Text(if (paired) "Pair again" else "Pair with Mac") } }
             }
             if (paired) {
-                Button(onClick = onSendFiles) { Text("Send files") }
-                OutlinedButton(onClick = onUnpair) { Text("Unpair") }
+                item { Button(onClick = onSendFiles) { Text("Send files") } }
+                item { OutlinedButton(onClick = onUnpair) { Text("Unpair") } }
             }
-            OutlinedButton(onClick = onAllowBackground) { Text("Allow running in background") }
-            // Selectable so the automatic clipboard send can be tried on a device.
-            SelectionContainer {
-                Text("Phone code: $phoneCode", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+            item { OutlinedButton(onClick = onAllowBackground) { Text("Allow running in background") } }
+            item {
+                // Selectable so the automatic clipboard send can be tried on a device.
+                SelectionContainer {
+                    Text("Phone code: $phoneCode", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                }
+            }
+            item { Text("Received", style = MaterialTheme.typography.titleMedium) }
+            if (received.isEmpty()) {
+                item { Text("Files you receive from your Mac appear here.", style = MaterialTheme.typography.bodyMedium) }
+            } else {
+                // One "now" for the whole list, so rows around midnight agree on Today and Yesterday.
+                val nowMillis = System.currentTimeMillis()
+                items(received, key = { it.uri }) { file -> ReceivedFileRow(file, nowMillis, onOpen) }
             }
         }
     }

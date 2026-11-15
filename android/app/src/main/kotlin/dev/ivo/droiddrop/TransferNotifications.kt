@@ -104,10 +104,7 @@ object TransferNotifications {
     /** Opens the saved file in a viewer. Null when the location is not a content URI. */
     private fun openIntent(context: Context, uri: Uri): PendingIntent? {
         if (uri.scheme != "content") return null
-        val view = Intent(Intent.ACTION_VIEW)
-            .setDataAndType(uri, context.contentResolver.getType(uri))
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        return PendingIntent.getActivity(context, uri.hashCode(), view, PendingIntent.FLAG_IMMUTABLE)
+        return PendingIntent.getActivity(context, uri.hashCode(), FileViewer.intent(context, uri), PendingIntent.FLAG_IMMUTABLE)
     }
 
     private fun manager(context: Context) = context.getSystemService(NotificationManager::class.java)
