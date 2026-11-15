@@ -4,7 +4,7 @@ import Foundation
 ///
 /// Server callbacks hop to `queue` in the order the server raised them, so each message and chunk reaches the
 /// receiver of the session it arrived on, and a session's end is handled before the next one's start.
-/// Replies and outgoing frames go back through the server by fingerprint.
+/// Replies and outgoing frames go back through the server to the session they belong to, never to a successor.
 public final class FileTransfers: @unchecked Sendable {
     public struct Snapshot: Equatable, Sendable {
         public var incoming: TransferStatus?
@@ -39,14 +39,15 @@ public final class FileTransfers: @unchecked Sendable {
     private var reportedAt = DispatchTime.now()
     private var flushScheduled = false
 
-    /// Sets server.onSessionStarted/onSessionEnded/onChunk (not onMessage) and prunes partials. Holds the server weakly.
+    /// Sets server.onSessionStarted/onSessionEnded/onChunk (not onMessage) and prunes partials (now and at each session start).
+    /// Holds the server weakly.
     /// Call before the server starts.
     public init(server: DroidDropServer, partials: PartialStore, destination: URL) {
         self.server = server
         self.partials = partials
         self.destination = destination
-        server.onSessionStarted = { [weak self] fingerprint in
-            self?.queue.async { self?.sessionStarted(fingerprint) }
+        server.onSessionStarted = { [weak self] fingerprint, session in
+            self?.queue.async { self?.sessionStarted(fingerprint, session) }
         }
         server.onSessionEnded = { [weak self] fingerprint in
             self?.queue.async { self?.sessionEnded(fingerprint) }
@@ -91,10 +92,12 @@ public final class FileTransfers: @unchecked Sendable {
 
     // MARK: - On queue
 
-    private func sessionStarted(_ fingerprint: Data) {
+    private func sessionStarted(_ fingerprint: Data, _ session: DroidDropServer.SessionID) {
+        // Also here, not only at launch: a Launch-at-Login app runs for weeks. Active partials have a fresh mtime.
+        partials.prune()
         receivers[fingerprint]?.close()
         receivers[fingerprint] = FileReceiver(partials: partials, destination: destination)
-        let link = Link(fingerprint: fingerprint, server: server, owner: self)
+        let link = Link(fingerprint: fingerprint, session: session, server: server, owner: self)
         links[fingerprint] = link
         senders[fingerprint]?.connected(link)
         publish()
@@ -122,7 +125,8 @@ public final class FileTransfers: @unchecked Sendable {
         switch message {
         case let .fileOffer(transferId, name, size, sha256, _):
             guard let receiver = receivers[fingerprint] else { return }
-            server?.send(receiver.offer(transferId: transferId, name: name, size: size, sha256: sha256), to: fingerprint)
+            let reply = receiver.offer(transferId: transferId, name: name, size: size, sha256: sha256)
+            links[fingerprint]?.send(reply)
         case let .fileDone(transferId):
             guard let result = receivers[fingerprint]?.done(transferId: transferId) else { return }
             finish(result, from: fingerprint)
@@ -148,7 +152,7 @@ public final class FileTransfers: @unchecked Sendable {
     /// Reports an incoming transfer's outcome, then sends the receiver's reply.
     private func finish(_ result: (reply: Message, outcome: TransferOutcome), from fingerprint: Data) {
         onOutcome?(fingerprint, result.outcome)
-        server?.send(result.reply, to: fingerprint)
+        links[fingerprint]?.send(result.reply)
     }
 
     private func sender(for fingerprint: Data) -> FileSender {
@@ -209,17 +213,20 @@ public final class FileTransfers: @unchecked Sendable {
     /// so FileSender → Link makes no cycle.
     private final class Link: TransferLink, @unchecked Sendable {
         let fingerprint: Data
+        /// Frames go to this session only: a replaced session's sender must not write into its successor.
+        let session: DroidDropServer.SessionID
         private weak var server: DroidDropServer?
         private weak var owner: FileTransfers?
 
-        init(fingerprint: Data, server: DroidDropServer?, owner: FileTransfers) {
+        init(fingerprint: Data, session: DroidDropServer.SessionID, server: DroidDropServer?, owner: FileTransfers) {
             self.fingerprint = fingerprint
+            self.session = session
             self.server = server
             self.owner = owner
         }
 
         func send(_ message: Message) {
-            server?.send(message, to: fingerprint)
+            server?.send(message, to: fingerprint, session: session)
         }
 
         func sendChunk(transferId: String, offset: UInt64, data: Data, completion: @escaping @Sendable (Bool) -> Void) {
@@ -227,7 +234,7 @@ public final class FileTransfers: @unchecked Sendable {
                 failed()
                 return completion(false)
             }
-            server.sendChunk(transferId: transferId, offset: offset, data: data, to: fingerprint) { [weak self] handed in
+            server.sendChunk(transferId: transferId, offset: offset, data: data, to: fingerprint, session: session) { [weak self] handed in
                 if !handed { self?.failed() }
                 completion(handed)
             }

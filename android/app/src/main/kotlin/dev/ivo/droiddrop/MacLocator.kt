@@ -8,6 +8,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
 import java.net.Inet4Address
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 
 data class Endpoint(val host: String, val port: Int)
@@ -16,7 +17,6 @@ data class Endpoint(val host: String, val port: Int)
 class MacLocator(context: Context) {
     private val nsd = context.getSystemService(NsdManager::class.java)
     private val wifi = context.getSystemService(WifiManager::class.java)
-    private val executor = Executors.newSingleThreadExecutor()
 
     suspend fun find(fingerprint: String, timeoutMillis: Long = 5_000): Endpoint? {
         val lock = wifi.createMulticastLock("droiddrop-nsd").apply {
@@ -25,6 +25,9 @@ class MacLocator(context: Context) {
         }
         val result = CompletableDeferred<Endpoint?>()
         val infoCallbacks = CopyOnWriteArrayList<NsdManager.ServiceInfoCallback>()
+        // onServiceFound runs on NsdManager's thread and can race the cleanup below; once it starts, register nothing.
+        val registration = Any()
+        var finished = false
         val discovery = object : NsdManager.DiscoveryListener {
             override fun onServiceFound(service: NsdServiceInfo) {
                 val callback = object : NsdManager.ServiceInfoCallback {
@@ -39,8 +42,11 @@ class MacLocator(context: Context) {
                     override fun onServiceLost() {}
                     override fun onServiceInfoCallbackUnregistered() {}
                 }
-                infoCallbacks += callback
-                nsd.registerServiceInfoCallback(service, executor, callback)
+                synchronized(registration) {
+                    if (finished) return
+                    infoCallbacks += callback
+                    nsd.registerServiceInfoCallback(service, callbacks, callback)
+                }
             }
             override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) { result.complete(null) }
             override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
@@ -52,6 +58,7 @@ class MacLocator(context: Context) {
             nsd.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discovery)
             return withTimeoutOrNull(timeoutMillis) { result.await() }
         } finally {
+            synchronized(registration) { finished = true }
             infoCallbacks.forEach { runCatching { nsd.unregisterServiceInfoCallback(it) } }
             runCatching { nsd.stopServiceDiscovery(discovery) }
             runCatching { lock.release() }
@@ -60,5 +67,14 @@ class MacLocator(context: Context) {
 
     private companion object {
         const val SERVICE_TYPE = "_droiddrop._tcp"
+
+        /**
+         * One callback thread for the process, never shut down: NsdManager delivers onServiceInfoCallbackUnregistered
+         * after find's cleanup and does not catch RejectedExecutionException, so a per-service executor that was shut
+         * down on destroy would crash the process. A per-service executor that is never shut down leaks a thread.
+         */
+        val callbacks: Executor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "droiddrop-nsd").apply { isDaemon = true }
+        }
     }
 }

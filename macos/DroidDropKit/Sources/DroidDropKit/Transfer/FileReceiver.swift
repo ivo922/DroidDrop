@@ -97,6 +97,7 @@ public final class FileReceiver {
             let name = FileName.unique(current.name) { fileManager.fileExists(atPath: destination.appending(path: $0).path) }
             let saved = destination.appending(path: name)
             try fileManager.moveItem(at: current.partial, to: saved)
+            Self.quarantine(saved)
             partials.markCompleted(sha256: current.sha256, size: current.size, location: saved)
             return (.fileResult(transferId: transferId, ok: true, reason: nil), .received(name: name, url: saved))
         } catch {
@@ -123,5 +124,17 @@ public final class FileReceiver {
         close()
         try? FileManager.default.removeItem(at: current.partial)
         return (.fileCancel(transferId: current.transferId), .failed(.incoming, name: current.name, reason: reason))
+    }
+
+    /// Marks a received file as downloaded, so Gatekeeper checks it on first open. The app is not sandboxed, so macOS
+    /// adds nothing itself. Best effort: a file system without extended attributes still gets the file.
+    static func quarantine(_ url: URL) {
+        var values = URLResourceValues()
+        values.quarantineProperties = [
+            kLSQuarantineAgentNameKey as String: "DroidDrop",
+            kLSQuarantineTypeKey as String: kLSQuarantineTypeOtherDownload as String,
+        ]
+        var target = url
+        try? target.setResourceValues(values)
     }
 }

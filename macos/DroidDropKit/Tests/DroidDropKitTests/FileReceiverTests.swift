@@ -40,6 +40,16 @@ import Testing
         return try #require(receiver.done(transferId: id1)).outcome
     }
 
+    @Test func receivedFileIsQuarantined() throws {
+        // Not sandboxed, so macOS adds nothing itself: without this a received .app or .command skips Gatekeeper.
+        let (receiver, root) = makeReceiver()
+        let outcome = try receive("tool.command", Data("echo hi".utf8), with: receiver)
+        guard case .received(_, let url) = outcome else { Issue.record("not received: \(outcome)"); return }
+        let quarantine = try url.resourceValues(forKeys: [.quarantinePropertiesKey]).quarantineProperties
+        #expect(quarantine?[kLSQuarantineAgentNameKey as String] as? String == "DroidDrop")
+        #expect(destinationCount(root) == 1)
+    }
+
     @Test func receivesFileIntoDestination() throws {
         let (receiver, root) = makeReceiver()
         let data = sample()

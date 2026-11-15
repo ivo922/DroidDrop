@@ -10,11 +10,16 @@ import javax.net.ssl.SSLException
  * Only the Mac saying no counts toward [MAX_REJECTIONS]: a TLS certificate alert (SPEC §5 rule 1: the Mac fails
  * the handshake for an unpaired client) or a [ProtocolException], such as `session_closed` before the session was
  * established. Resets, timeouts and handshakes cut off by the network only back off: a Wi-Fi drop must never
- * cost the pairing. A [PinMismatchException] anywhere in the cause chain means the Mac's certificate changed,
- * so the loop unpairs immediately.
+ * cost the pairing. A [PinMismatchException] anywhere in the cause chain means some other certificate answered.
+ *
+ * None of these unpair: alerts sent before the server certificate are unauthenticated, and a mismatch only proves
+ * that another device answered. They change what the phone shows ([ReconnectRound]); the pairing and the
+ * identity are only ever removed by the user.
  */
 internal object ReconnectPolicy {
     const val MAX_REJECTIONS = 3
+    const val INITIAL_BACKOFF_MILLIS = 1_000L
+    const val MAX_BACKOFF_MILLIS = 60_000L
 
     enum class FailureKind { Retry, Rejection, PinMismatch }
 
@@ -26,6 +31,14 @@ internal object ReconnectPolicy {
         }
         return FailureKind.Retry
     }
+
+    /** The next wait between rounds: doubled up to the cap, or back to the start after a wake. */
+    fun nextBackoff(current: Long, woke: Boolean): Long =
+        if (woke) INITIAL_BACKOFF_MILLIS else (current * 2).coerceAtMost(MAX_BACKOFF_MILLIS)
+
+    /** Pairing reached a Mac that already trusts this identity ("Pair again" while still paired): treat it as paired. */
+    fun alreadyPaired(error: Throwable): Boolean =
+        generateSequence(error) { it.cause }.any { it is ProtocolException && it.code == ProtocolException.ALREADY_PAIRED }
 
     /** SPEC §4.1 hello name is non-empty. Global device name, then model, then "Android". */
     fun deviceName(global: String?, model: String?): String =
@@ -40,23 +53,67 @@ internal object ReconnectPolicy {
     private val CERTIFICATE_ALERTS = listOf("certificate_unknown", "bad_certificate", "certificate_required")
 }
 
-/** Consecutive rejections. Retries neither increment nor reset the streak. */
-internal class RejectionCounter(private val max: Int = ReconnectPolicy.MAX_REJECTIONS) {
+/**
+ * What the reconnect loop has learned since the last connection: consecutive rejections (retries and pin mismatches
+ * neither increment nor reset the streak), and whether a round had only another certificate answering.
+ */
+internal class ReconnectHistory(private val max: Int = ReconnectPolicy.MAX_REJECTIONS) {
     var consecutive: Int = 0
         private set
 
+    /** The Mac has said no [max] times in a row since the last connection. */
+    val rejected: Boolean get() = consecutive >= max
+
+    /**
+     * Sticky until a connection: after a Mac reset the mismatching host is forgotten and Bonjour never matches the
+     * old fingerprint, so later rounds have nothing to try and must keep the pair-again hint.
+     */
+    var certificateChanged: Boolean = false
+
     fun onConnected() {
         consecutive = 0
+        certificateChanged = false
     }
 
-    fun onFailure(kind: ReconnectPolicy.FailureKind): Outcome = when (kind) {
-        ReconnectPolicy.FailureKind.Retry -> Outcome.Backoff
-        ReconnectPolicy.FailureKind.PinMismatch -> Outcome.UnpairPinMismatch
-        ReconnectPolicy.FailureKind.Rejection -> {
-            consecutive++
-            if (consecutive >= max) Outcome.UnpairRejections else Outcome.Backoff
+    fun record(kind: ReconnectPolicy.FailureKind) {
+        if (kind == ReconnectPolicy.FailureKind.Rejection) consecutive++
+    }
+}
+
+/** The failures of one pass over the candidate endpoints, and what to show and forget after it. Never unpairs. */
+internal class ReconnectRound(private val history: ReconnectHistory) {
+    enum class Problem {
+        Rejected,
+        CertificateChanged;
+
+        fun message(macName: String): String = when (this) {
+            Rejected -> "$macName no longer accepts this phone. Pair again."
+            CertificateChanged -> "$macName answered with a different certificate. If DroidDrop was reset on the Mac, pair again."
         }
     }
 
-    enum class Outcome { Backoff, UnpairRejections, UnpairPinMismatch }
+    /** [problem] is null while the phone is simply still looking. [staleHosts] answered with another certificate. */
+    data class Verdict(val problem: Problem?, val staleHosts: Set<String>)
+
+    private val mismatched = linkedSetOf<String>()
+    private var otherFailures = 0
+
+    fun failed(endpoint: Endpoint, kind: ReconnectPolicy.FailureKind) {
+        if (kind == ReconnectPolicy.FailureKind.PinMismatch) {
+            mismatched += endpoint.host
+        } else {
+            otherFailures++
+            history.record(kind)
+        }
+    }
+
+    fun verdict(): Verdict {
+        if (mismatched.isNotEmpty() && otherFailures == 0) history.certificateChanged = true
+        val problem = when {
+            history.rejected -> Problem.Rejected
+            history.certificateChanged -> Problem.CertificateChanged
+            else -> null
+        }
+        return Verdict(problem, mismatched.toSet())
+    }
 }

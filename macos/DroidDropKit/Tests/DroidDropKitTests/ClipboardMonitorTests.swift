@@ -97,4 +97,23 @@ final class Sent {
         #expect(sent.messages.isEmpty)
         #expect(pasteboard.string(forType: .string) == "droiddrop://pair?secret=x")
     }
+
+    @Test func applyWritesPasteboard() {
+        let (pasteboard, monitor, _) = makeMonitor()
+        defer { pasteboard.releaseGlobally() }
+        #expect(monitor.apply("from phone"))
+        #expect(pasteboard.string(forType: .string) == "from phone")
+    }
+
+    @Test func appliedClipIsNotSentBack() {
+        let (pasteboard, monitor, sent) = makeMonitor()
+        defer { pasteboard.releaseGlobally() }
+        monitor.tick()
+        monitor.apply("from phone")
+        monitor.tick()
+        #expect(sent.messages.isEmpty)
+        pasteboard.clearContents(); pasteboard.setString("typed on mac", forType: .string)
+        monitor.tick()
+        #expect(sent.messages.count == 1)
+    }
 }

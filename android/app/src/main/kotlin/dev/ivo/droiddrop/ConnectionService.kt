@@ -19,6 +19,7 @@ import dev.ivo.droiddrop.core.protocol.Message
 import dev.ivo.droiddrop.core.session.DroidDropClient
 import dev.ivo.droiddrop.core.session.MessageSender
 import dev.ivo.droiddrop.core.session.SessionListener
+import dev.ivo.droiddrop.core.tls.DeviceIdentity
 import dev.ivo.droiddrop.core.transfer.FileReceiver
 import dev.ivo.droiddrop.core.transfer.PartialStore
 import java.io.File
@@ -27,7 +28,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
@@ -45,10 +45,11 @@ import kotlinx.coroutines.withTimeoutOrNull
 class ConnectionService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val loopMutex = Mutex()
-    private val networkChanged = Channel<Unit>(Channel.CONFLATED)
+    /** Ends the reconnect wait early: a new network, the app opened, or a file queued. */
+    private val wake = Channel<Unit>(Channel.CONFLATED)
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
-            networkChanged.trySend(Unit)
+            wake.trySend(Unit)
         }
     }
     private lateinit var store: PairingStore
@@ -74,6 +75,7 @@ class ConnectionService : Service() {
             ConnectionStatus.state.collect { state ->
                 getSystemService(NotificationManager::class.java)
                     .notify(Notifications.ID, Notifications.build(this@ConnectionService, state))
+                ClipboardTileService.refresh(this@ConnectionService)
             }
         }
         scope.launch {
@@ -101,12 +103,14 @@ class ConnectionService : Service() {
             Notifications.build(this, ConnectionStatus.state.value),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
         )
-        if (pairUri != null || loop?.isActive != true) {
+        if (pairUri == null && loop?.isActive == true) {
+            wake.trySend(Unit) // someone wants the Mac now: skip the rest of the backoff
+        } else {
             loop?.cancel()
             loop = scope.launch {
                 loopMutex.withLock {
                     AndroidIdentity.awaitPendingDelete()
-                    val identity = withContext(Dispatchers.IO) { AndroidIdentity.loadOrCreate() }
+                    val identity = loadIdentity()
                     currentCoroutineContext().ensureActive()
                     val client = DroidDropClient(identity, deviceName())
                     // pair() blocks in client.run until that session ends. A failed first pair
@@ -114,7 +118,12 @@ class ConnectionService : Service() {
                     // Mac connects or the first search round ends. CancellationException propagates.
                     if (pairUri != null) {
                         val paired = pair(client, pairUri)
-                        if (!paired && store.load() == null) return@withLock
+                        if (!paired && store.load() == null) {
+                            // Nothing to reconnect to: the app keeps showing the Failed state, the notification goes.
+                            // startId: a newer pair or start that arrived meanwhile keeps the service.
+                            stopSelf(startId)
+                            return@withLock
+                        }
                         connectLoop(client, keepFailure = !paired)
                     } else {
                         connectLoop(client)
@@ -134,12 +143,32 @@ class ConnectionService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /**
+     * Retries with backoff instead of throwing: the service scope has no exception handler, so a keystore error
+     * would crash the process, and START_STICKY would crash-loop it.
+     */
+    private suspend fun loadIdentity(): DeviceIdentity {
+        var backoff = ReconnectPolicy.INITIAL_BACKOFF_MILLIS
+        while (true) {
+            try {
+                return withContext(Dispatchers.IO) { AndroidIdentity.loadOrCreate() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "could not load the identity", e)
+                ConnectionStatus.state.value = ConnectionState.Failed("Could not load this phone's identity. Retrying…")
+                delay(backoff)
+                backoff = ReconnectPolicy.nextBackoff(backoff, woke = false)
+            }
+        }
+    }
+
     /** Pairs and then keeps that session as the live connection. Returns false if pairing failed. */
     private suspend fun pair(client: DroidDropClient, uri: PairUri): Boolean {
         ConnectionStatus.state.value = ConnectionState.Pairing(uri.name)
         val fingerprint = Base64Url.decode32(uri.fingerprint)!!
         val secret = Base64Url.decode32(uri.secret)!!
-            var lastError: Exception? = null
+        var lastError: Exception? = null
         var sawPinMismatch = false
         for (host in uri.hosts) {
             var paired = false
@@ -156,7 +185,12 @@ class ConnectionService : Service() {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (ReconnectPolicy.classify(e) == ReconnectPolicy.FailureKind.PinMismatch) {
+                if (ReconnectPolicy.alreadyPaired(e)) {
+                    // Keep the QR's fresh addresses: they are why the user scanned it again.
+                    store.save(PairedMac(uri.name, uri.fingerprint, uri.hosts, uri.port))
+                    store.rememberAddress(host, uri.port)
+                    paired = true
+                } else if (ReconnectPolicy.classify(e) == ReconnectPolicy.FailureKind.PinMismatch) {
                     sawPinMismatch = true
                     Log.w(TAG, "pairing via $host rejected the pinned certificate", e)
                 } else {
@@ -165,6 +199,7 @@ class ConnectionService : Service() {
                 }
             } finally {
                 transfers.close()
+                Clips.link.detach()
             }
             if (paired) return true
         }
@@ -177,8 +212,8 @@ class ConnectionService : Service() {
     }
 
     private suspend fun connectLoop(client: DroidDropClient, keepFailure: Boolean = false) {
-        var backoff = INITIAL_BACKOFF_MILLIS
-        val rejections = RejectionCounter()
+        var backoff = ReconnectPolicy.INITIAL_BACKOFF_MILLIS
+        val history = ReconnectHistory()
         var announceSearch = !keepFailure
         while (true) {
             currentCoroutineContext().ensureActive()
@@ -195,8 +230,7 @@ class ConnectionService : Service() {
             }.distinct()
 
             var connected = false
-            var pinMismatches = 0
-            var otherFailures = 0
+            val round = ReconnectRound(history)
             for (endpoint in candidates) {
                 val transfers = newTransferSession()
                 try {
@@ -204,66 +238,36 @@ class ConnectionService : Service() {
                         transfers,
                         onConnected = {
                             connected = true
-                            rejections.onConnected()
+                            history.onConnected()
                             store.rememberAddress(endpoint.host, endpoint.port)
                         },
                     ))
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    if (!connected) {
-                        when (rejections.onFailure(ReconnectPolicy.classify(e))) {
-                            RejectionCounter.Outcome.Backoff -> {
-                                otherFailures++
-                                Log.w(TAG, "session with $endpoint ended", e)
-                            }
-                            RejectionCounter.Outcome.UnpairPinMismatch -> {
-                                pinMismatches++
-                                Log.w(TAG, "certificate at $endpoint did not match the pin", e)
-                            }
-                            RejectionCounter.Outcome.UnpairRejections -> {
-                                Log.w(TAG, "Mac rejected the phone", e)
-                                forgetPairing("${mac.name} no longer accepts this phone. Unpair and pair again.")
-                                return
-                            }
-                        }
-                    } else {
-                        Log.w(TAG, "session with $endpoint ended", e)
-                    }
+                    Log.w(TAG, "session with $endpoint ended", e)
+                    if (!connected) round.failed(endpoint, ReconnectPolicy.classify(e))
                 } finally {
                     transfers.close()
+                    // Sessions run one at a time under loopMutex, so this cannot clear a newer session's sender.
+                    Clips.link.detach()
                 }
                 if (connected) break
             }
-            if (!connected && pinMismatches > 0 && otherFailures == 0) {
-                forgetPairing("The paired Mac's certificate changed. Pair again.")
-                return
-            }
 
-            announceSearch = true
             if (connected) {
-                backoff = INITIAL_BACKOFF_MILLIS
+                announceSearch = true
+                backoff = ReconnectPolicy.INITIAL_BACKOFF_MILLIS
                 continue
             }
-            withTimeoutOrNull(backoff) { networkChanged.receive() }
-            backoff = (backoff * 2).coerceAtMost(MAX_BACKOFF_MILLIS)
-        }
-    }
-
-    /**
-     * Drops the outgoing queue, clears the paired Mac and deletes the keystore identity so the next pair presents a
-     * new fingerprint.
-     * Runs to completion even when the service scope is cancelling.
-     */
-    private suspend fun forgetPairing(message: String) {
-        withContext(NonCancellable) {
-            Transfers.sender.cancelAll() // the queue was for the Mac being forgotten
-            store.clear()
-            withContext(Dispatchers.IO) {
-                runCatching { AndroidIdentity.delete() }.onFailure { Log.e(TAG, "identity delete failed", it) }
-            }
-            ConnectionStatus.state.value = ConnectionState.Failed(message)
-            stopSelf()
+            // Never unpairs (see ReconnectPolicy): it shows the problem and keeps trying until the user pairs again.
+            val verdict = round.verdict()
+            if (verdict.staleHosts.isNotEmpty()) store.forgetAddresses(verdict.staleHosts)
+            val problem = verdict.problem
+            if (problem != null) ConnectionStatus.state.value = ConnectionState.Failed(problem.message(mac.name))
+            announceSearch = problem == null
+            val woke = withTimeoutOrNull(backoff) { wake.receive() } != null
+            backoff = ReconnectPolicy.nextBackoff(backoff, woke)
         }
     }
 
@@ -292,8 +296,11 @@ class ConnectionService : Service() {
         override fun onPaired(serverName: String) = onPaired(serverName)
 
         override fun onConnected(serverName: String, sender: MessageSender) {
+            // Not only in onCreate: the service runs for weeks. Here, on the reader thread, no offer can race it.
+            runCatching { partials.prune() }
             onConnected()
             transfers.connected(sender)
+            Clips.link.attach(sender)
             ConnectionStatus.state.value = ConnectionState.Connected(serverName)
         }
 
@@ -310,7 +317,12 @@ class ConnectionService : Service() {
                 return
             }
             scope.launch(Dispatchers.Main) {
-                if (!clipboard.write(text)) Log.w(TAG, "could not apply clip ${message.id}")
+                if (clipboard.write(text)) {
+                    // Before the clip listener runs: it is dispatched later on this same looper.
+                    Clips.link.outbox.noteRemote(text)
+                } else {
+                    Log.w(TAG, "could not apply clip ${message.id}")
+                }
             }
         }
 
@@ -325,8 +337,6 @@ class ConnectionService : Service() {
     companion object {
         private const val TAG = "ConnectionService"
         private const val EXTRA_PAIR_URI = "pairUri"
-        private const val INITIAL_BACKOFF_MILLIS = 1_000L
-        private const val MAX_BACKOFF_MILLIS = 60_000L
         private const val PROGRESS_INTERVAL_MILLIS = 500L
         private const val OUTGOING_SPOOL_MAX_AGE_MILLIS = 24 * 60 * 60 * 1_000L
 

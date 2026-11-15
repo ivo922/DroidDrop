@@ -43,7 +43,7 @@ class DroidDropClient(
      *
      * Returns normally only when the server ends the stream cleanly after [SessionListener.onConnected].
      * Throws [ProtocolException] with code `session_closed` when the session is rejected, violates the protocol,
-     * or ends before it was established; [IOException] (including SSLException and SocketTimeoutException) on
+     * or ends before it was established, or `already_paired` when pairing with a server that already trusts us; [IOException] (including SSLException and SocketTimeoutException) on
      * network, TLS or receive-timeout failure.
      */
     suspend fun run(host: String, port: Int, serverFingerprint: ByteArray, pairingSecret: ByteArray?, listener: SessionListener) {
@@ -76,7 +76,7 @@ class DroidDropClient(
                         pinger = launch { keepalive(connection, session) }
                     }
                     is ClientAction.Deliver -> listener.onMessage(action.message)
-                    is ClientAction.Close -> throw ProtocolException("session_closed", action.reason)
+                    is ClientAction.Close -> throw ProtocolException(action.code, action.reason)
                 }
             }
         }

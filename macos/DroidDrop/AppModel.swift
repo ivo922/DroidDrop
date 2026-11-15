@@ -4,9 +4,9 @@ import Foundation
 
 /// Menu-bar state for the local server.
 ///
-/// `isListening` follows `start`'s completion only. A `.waiting` listener fails that
-/// completion (after the server's port fallback). The server does not report a listener
-/// failure once `start` has succeeded, so the menu cannot show one.
+/// `isListening` follows `start`'s completion, then `onListeningChanged`: a listener that fails later goes
+/// "Not listening" until the server's restart brings it back. While the listener waits for a network (or Local
+/// Network access), `start` has not completed and the menu shows the waiting reason from `onListenerWaiting`.
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var pairedPeers: [Peer] = []
@@ -61,7 +61,17 @@ final class AppModel: ObservableObject {
             destination: FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0].appending(path: "DroidDrop")
         )
         self.transfers = transfers
-        server.onMessage = { [weak transfers] peer, message in transfers?.receive(message, from: peer.fingerprint) }
+        server.onMessage = { [weak self, weak transfers] peer, message in
+            guard case .clip(_, let mime, let text) = message else {
+                transfers?.receive(message, from: peer.fingerprint)
+                return
+            }
+            // Rejected clips are dropped silently: their text is never logged.
+            guard let text = ClipboardInbox.accept(mime: mime, text: text) else { return }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { _ = self?.clipboard?.apply(text) }
+            }
+        }
         // DispatchQueue.main keeps FIFO order (one Task per callback does not), so a stale progress snapshot can
         // never land after the final idle one.
         transfers.onSnapshot = { [weak self] snapshot in
@@ -105,6 +115,25 @@ final class AppModel: ObservableObject {
                 self.pairingExpiresAt = nil
                 self.noNetwork = false
                 self.refreshPeers()
+            }
+        }
+        server.onListeningChanged = { [weak self] port in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.isListening = port != nil
+                    // A restarted listener may have another port: an open QR code must carry the live one.
+                    if port != nil, self.pairURI != nil { self.openPairingIfPossible() }
+                }
+            }
+        }
+        server.onListenerWaiting = { [weak self] error in
+            let message = "Waiting for the network: " + Self.describe(error)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, !self.isListening else { return }
+                    self.serverError = message
+                }
             }
         }
         server.start { [weak self] result in

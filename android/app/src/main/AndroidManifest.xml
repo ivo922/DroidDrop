@@ -33,10 +33,12 @@
 
         <activity
             android:name=".ShareActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density|fontScale|keyboard|keyboardHidden|navigation|locale|layoutDirection"
             android:exported="true"
             android:excludeFromRecents="true"
             android:label="Send to Mac"
             android:noHistory="true"
+            android:taskAffinity=""
             android:theme="@android:style/Theme.Translucent.NoTitleBar">
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
@@ -49,6 +51,27 @@
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".SendClipboardActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density|fontScale|keyboard|keyboardHidden|navigation|locale|layoutDirection"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:label="Send clipboard"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <service
+            android:name=".ClipboardTileService"
+            android:exported="true"
+            android:icon="@android:drawable/ic_menu_send"
+            android:label="Send clipboard"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
 
         <service
             android:name=".ConnectionService"

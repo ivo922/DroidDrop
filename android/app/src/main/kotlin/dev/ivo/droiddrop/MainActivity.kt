@@ -1,6 +1,7 @@
 package dev.ivo.droiddrop
 
 import android.Manifest
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -29,7 +31,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.lifecycleScope
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
@@ -47,6 +48,14 @@ class MainActivity : ComponentActivity() {
     private var scanAfterLocalNetworkGrant = false
     private var permissionRequestOpen = false
     private lateinit var store: PairingStore
+    private val clipboard by lazy { getSystemService(ClipboardManager::class.java) }
+
+    // Only a focused app may read the clipboard, so automatic sends run only while this screen is in front.
+    // A clip the service just applied from the Mac also lands here; ClipOutbox skips it as FromMac.
+    private val clipListener = ClipboardManager.OnPrimaryClipChangedListener {
+        val (text, sensitive) = OutgoingClip.read(this)
+        OutgoingClip.send(this, text, automatic = true, sensitive = sensitive)
+    }
 
     private val runtimePermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -66,7 +75,7 @@ class MainActivity : ComponentActivity() {
 
     // The picked URIs are granted to this activity, so they are opened here and not by the service (R9).
     private val filePicker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        if (uris.isNotEmpty()) lifecycleScope.launch { OutgoingFiles.send(this@MainActivity, uris) }
+        if (uris.isNotEmpty()) OutgoingFiles.send(this, uris)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -81,8 +90,9 @@ class MainActivity : ComponentActivity() {
                 var phoneCode by remember { mutableStateOf("…") }
                 LaunchedEffect(generation) {
                     AndroidIdentity.awaitPendingDelete()
+                    // A keystore error must not crash the screen; the service reports it as Failed.
                     val code = withContext(Dispatchers.IO) {
-                        Pairing.displayCode(AndroidIdentity.loadOrCreate().fingerprint)
+                        runCatching { Pairing.displayCode(AndroidIdentity.loadOrCreate().fingerprint) }.getOrDefault("unavailable")
                     }
                     ensureActive()
                     phoneCode = code
@@ -103,6 +113,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        clipboard.addPrimaryClipChangedListener(clipListener)
         if (LocalNetwork.allowed(this)) {
             resumeSavedConnection()
         } else {
@@ -115,6 +126,11 @@ class MainActivity : ComponentActivity() {
                 else -> Unit
             }
         }
+    }
+
+    override fun onPause() {
+        clipboard.removePrimaryClipChangedListener(clipListener)
+        super.onPause()
     }
 
     override fun onDestroy() {
@@ -200,7 +216,10 @@ private fun MainScreen(
                 OutlinedButton(onClick = onUnpair) { Text("Unpair") }
             }
             OutlinedButton(onClick = onAllowBackground) { Text("Allow running in background") }
-            Text("Phone code: $phoneCode", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+            // Selectable so the automatic clipboard send can be tried on a device.
+            SelectionContainer {
+                Text("Phone code: $phoneCode", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+            }
         }
     }
 }

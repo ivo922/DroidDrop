@@ -27,6 +27,8 @@ public final class FileSender: @unchecked Sendable {
 
     private struct Item {
         let url: URL
+        /// Tells a finished hash which item it belongs to, across sessions and requeues.
+        let serial: Int
         /// Computed once, kept across re-offers.
         var digest: (hex: String, size: Int)?
         var name: String { url.lastPathComponent }
@@ -58,15 +60,21 @@ public final class FileSender: @unchecked Sendable {
 
     private let queue: DispatchQueue
     private let makeID: () -> String
+    private let hash: @Sendable (URL) throws -> (hex: String, size: Int)
+    private var nextSerial = 0
+    /// The item whose hash is running. One per item, whatever the sessions do meanwhile.
+    private var hashing: Int?
     private var items: [Item] = []
     private var link: TransferLink?
     private var active: Active?
-    /// Bumped whenever the session or the active file changes; stale digests and completions carry an older value.
+    /// Bumped whenever the session or the active file changes; stale chunk completions carry an older value.
     private var generation = 0
 
-    public init(queue: DispatchQueue, makeID: @escaping () -> String = { UUID().uuidString.lowercased() }) {
+    public init(queue: DispatchQueue, makeID: @escaping () -> String = { UUID().uuidString.lowercased() },
+                hash: @escaping @Sendable (URL) throws -> (hex: String, size: Int) = { try FileDigest.sha256(of: $0) }) {
         self.queue = queue
         self.makeID = makeID
+        self.hash = hash
     }
 
     /// Files queued, including the active one.
@@ -78,7 +86,8 @@ public final class FileSender: @unchecked Sendable {
             if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
                 onOutcome?(.failed(.outgoing, name: url.lastPathComponent, reason: "folders are not supported"))
             } else {
-                items.append(Item(url: url))
+                nextSerial += 1
+                items.append(Item(url: url, serial: nextSerial))
             }
         }
         startHeadIfIdle()
@@ -143,23 +152,33 @@ public final class FileSender: @unchecked Sendable {
             offerHead()
             return
         }
+        // Still hashing from an earlier session: digested() offers it on this one.
+        guard hashing != head.serial else { return }
+        hashing = head.serial
         let url = head.url
+        let serial = head.serial
         let queue = queue
-        let token = generation
+        let hash = hash
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let result = Result { try FileDigest.sha256(of: url) }
-            queue.async { self?.digested(result, token: token) }
+            let result = Result { try hash(url) }
+            queue.async { self?.digested(result, serial: serial) }
         }
     }
 
-    private func digested(_ result: Result<(hex: String, size: Int), Error>, token: Int) {
-        guard token == generation, !items.isEmpty else { return }
+    /// A digest outlives the session it started in, so a reconnect never re-reads the file.
+    private func digested(_ result: Result<(hex: String, size: Int), Error>, serial: Int) {
+        if hashing == serial { hashing = nil }
+        guard items.first?.serial == serial else { return }  // cancelled or finished meanwhile
+        let waiting: Bool
+        if case .hashing? = active?.phase { waiting = link != nil } else { waiting = false }
         switch result {
         case .success(let digest):
             items[0].digest = digest
+            guard waiting else { return }  // kept for the next session
             active?.size = digest.size
             offerHead()
         case .failure:
+            guard waiting else { return }  // the next session hashes again
             finishHead(.failed(.outgoing, name: items[0].name, reason: Self.unreadable))
         }
     }

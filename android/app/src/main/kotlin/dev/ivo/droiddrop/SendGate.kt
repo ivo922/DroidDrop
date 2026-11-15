@@ -9,4 +9,11 @@ object SendGate {
         fileCount <= 0 -> "Nothing to send."
         else -> null
     }
+
+    /**
+     * True when an ACTION_SEND share is text (sent as a clip): no EXTRA_STREAM and non-blank EXTRA_TEXT.
+     * ClipData URIs do not count, because apps attach a preview thumbnail there next to the text.
+     */
+    fun sharesText(singleSend: Boolean, hasStream: Boolean, text: String?): Boolean =
+        singleSend && !hasStream && !text.isNullOrBlank()
 }

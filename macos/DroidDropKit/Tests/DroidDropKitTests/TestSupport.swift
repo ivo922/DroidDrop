@@ -93,6 +93,37 @@ func eventually(timeout: TimeInterval = 5, _ condition: () -> Bool) async throws
     }
 }
 
+/// A plain TCP connection that never starts TLS, like a silent device on the LAN. `closed` once the server drops it.
+final class RawClient: @unchecked Sendable {
+    private let connection: NWConnection
+    private let queue = DispatchQueue(label: "test.raw.\(UUID().uuidString)")
+    private let lock = NSLock()
+    private var isClosed = false
+    var closed: Bool { lock.withLock { isClosed } }
+
+    init(port: UInt16) {
+        connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+        connection.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .failed, .cancelled: self?.markClosed()
+            default: break
+            }
+        }
+        connection.start(queue: queue)
+        receive()
+    }
+
+    func cancel() { connection.cancel() }
+
+    private func receive() {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] _, _, isComplete, error in
+            if isComplete || error != nil { self?.markClosed() } else { self?.receive() }
+        }
+    }
+
+    private func markClosed() { lock.withLock { isClosed = true } }
+}
+
 enum TestClient {
     /// `react` runs on the connection's queue after each event is recorded.
     static func connect(port: UInt16, identity: Identity, pinnedServer: Data,

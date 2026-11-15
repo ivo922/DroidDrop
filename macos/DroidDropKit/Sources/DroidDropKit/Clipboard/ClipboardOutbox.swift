@@ -76,6 +76,13 @@ public struct ClipboardOutbox {
         lastRemoteHash = Self.hash(text)
     }
 
+    /// Records a clip applied from the phone and, once a baseline exists, takes its `changeCount` as seen,
+    /// so the next poll does not even read it.
+    public mutating func noteApplied(text: String, changeCount: Int) {
+        noteRemote(text: text)
+        if lastChangeCount != nil { lastChangeCount = changeCount }
+    }
+
     private static func hash(_ text: String) -> Data {
         Data(SHA256.hash(data: Data(text.utf8)))
     }

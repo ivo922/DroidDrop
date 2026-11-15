@@ -11,25 +11,47 @@ public final class DroidDropServer: @unchecked Sendable {
         public var advertise: Bool
         /// Closes a connection after this long without receiving anything (SPEC §5 rule 5).
         public var idleTimeout: TimeInterval
+        /// Closes a connection that has not become an established session (TLS, hello, pairing) within this long.
+        public var handshakeTimeout: TimeInterval
+        /// Most connections one remote host may have that are not established sessions yet.
+        public var pendingPerHost: Int
 
-        public init(name: String, port: UInt16 = 47321, advertise: Bool = true, idleTimeout: TimeInterval = DroidDropServer.idleTimeout) {
+        public init(name: String, port: UInt16 = 47321, advertise: Bool = true, idleTimeout: TimeInterval = DroidDropServer.idleTimeout,
+                    handshakeTimeout: TimeInterval = DroidDropServer.handshakeTimeout,
+                    pendingPerHost: Int = DroidDropServer.pendingPerHost) {
             self.name = name
             self.port = port
             self.advertise = advertise
             self.idleTimeout = idleTimeout
+            self.handshakeTimeout = handshakeTimeout
+            self.pendingPerHost = pendingPerHost
         }
+    }
+
+    /// One established session. A peer's next session gets a new one, so frames meant for a replaced session
+    /// can be dropped instead of reaching its successor (SPEC §5 rule 6).
+    public struct SessionID: Hashable, Sendable {
+        fileprivate let value: UInt64
     }
 
     public static let serviceType = "_droiddrop._tcp"
     public static let idleTimeout: TimeInterval = 90
+    /// Pairing is a QR scan away from the connect, and a reconnect finishes in well under a second.
+    public static let handshakeTimeout: TimeInterval = 15
+    /// A phone opens one connection at a time; a few spare for reconnect overlap.
+    public static let pendingPerHost = 4
 
     public let queue = DispatchQueue(label: "dev.ivo.droiddrop.server")
     public let identity: Identity
     public var onConnectedPeersChanged: (([Peer]) -> Void)?
+    /// After `start` succeeded: the port while listening again, nil while the listener is down and being restarted.
+    public var onListeningChanged: ((UInt16?) -> Void)?
+    /// The listener is waiting (no usable network, Local Network access not granted). It starts by itself later.
+    public var onListenerWaiting: ((Error) -> Void)?
     public var onPeerPaired: ((Peer) -> Void)?
     public var onMessage: ((Peer, Message) -> Void)?
-    /// An established (registered) session, keyed by peer fingerprint.
-    public var onSessionStarted: ((Data) -> Void)?
+    /// An established (registered) session: peer fingerprint and the session's id for `send` / `sendChunk`.
+    public var onSessionStarted: ((Data, SessionID) -> Void)?
     /// Also fired for a session replaced by a newer one, before the newer one's onSessionStarted.
     public var onSessionEnded: ((Data) -> Void)?
     /// Chunk from an established session: fingerprint, transferId, offset, data.
@@ -42,17 +64,27 @@ public final class DroidDropServer: @unchecked Sendable {
     private var pairingReplaces: Data?
     private var listener: NWListener?
     private var port: UInt16?
+    /// Between `start` and `stop`; a restart scheduled after `stop` does nothing.
+    private var running = false
+    private var listenerFailures = 0
+    /// The port the last ready listener had: a restart takes it again, because phones remember it.
+    private var lastPort: UInt16?
     private var connections: [ObjectIdentifier: FramedConnection] = [:]
+    /// Remote host of each connection that is not an established session yet (`pendingPerHost`).
+    private var pendingHosts: [ObjectIdentifier: String] = [:]
     private var sessions: [Data: Session] = [:]
+    private var nextSessionID: UInt64 = 0
 
     private final class Session {
+        let id: SessionID
         let framed: FramedConnection
         let fingerprint: Data
         var machine: ServerSession
         var lastReceived = ContinuousClock.now
         var watchdog: DispatchSourceTimer?
 
-        init(framed: FramedConnection, fingerprint: Data, machine: ServerSession) {
+        init(id: SessionID, framed: FramedConnection, fingerprint: Data, machine: ServerSession) {
+            self.id = id
             self.framed = framed
             self.fingerprint = fingerprint
             self.machine = machine
@@ -73,10 +105,13 @@ public final class DroidDropServer: @unchecked Sendable {
 
     // MARK: Lifecycle
 
-    /// Listens on the configured port, falling back to an OS-assigned one. `completion` runs once, on `queue`.
+    /// Listens on the configured port, falling back to an OS-assigned one. `completion` runs once, on `queue`, when
+    /// the listener is ready or has failed for good. While it waits (no network yet, the Local Network prompt still
+    /// open) `completion` does not run. A listener that fails later is restarted; see `onListeningChanged`.
     public func start(completion: @escaping (Result<UInt16, Error>) -> Void) {
         queue.async { [weak self] in
             guard let self else { return completion(.failure(CancellationError())) }
+            self.running = true
             self.startListener(port: self.configuration.port, completion: completion)
         }
     }
@@ -90,6 +125,7 @@ public final class DroidDropServer: @unchecked Sendable {
     public func stop() {
         queue.async { [weak self] in
             guard let self else { return }
+            self.running = false
             self.listener?.cancel()
             self.listener = nil
             self.port = nil
@@ -98,7 +134,8 @@ public final class DroidDropServer: @unchecked Sendable {
         }
     }
 
-    private func startListener(port: UInt16, completion: @escaping (Result<UInt16, Error>) -> Void) {
+    /// `completion` is nil for a restart, which reports through `onListeningChanged` instead.
+    private func startListener(port: UInt16, completion: ((Result<UInt16, Error>) -> Void)?) {
         let listener: NWListener
         do {
             let parameters = TLSParameters.make(identity: try identity.secIdentity(), queue: queue) { [weak self] fingerprint in
@@ -107,7 +144,7 @@ public final class DroidDropServer: @unchecked Sendable {
             }
             listener = try NWListener(using: parameters, on: port == 0 ? .any : NWEndpoint.Port(rawValue: port)!)
         } catch {
-            completion(.failure(error))
+            if let completion { completion(.failure(error)) } else { scheduleRestart() }
             return
         }
         if configuration.advertise {
@@ -118,36 +155,87 @@ public final class DroidDropServer: @unchecked Sendable {
             guard let self else { return connection.cancel() }
             self.accept(connection)
         }
-        var reported = false
+        var completion = completion
+        var wasReady = false
         listener.stateUpdateHandler = { [weak self, weak listener] state in
-            guard !reported else { return }
             guard let self, let listener else {
-                reported = true
-                return completion(.failure(CancellationError()))
+                completion?(.failure(CancellationError()))
+                completion = nil
+                return
+            }
+            guard self.listener === listener else {
+                // Replaced, failed or stopped: its events are stale, except that a stop before ready ends `start`.
+                if case .cancelled = state, let done = completion {
+                    completion = nil
+                    done(.failure(CancellationError()))
+                }
+                return
             }
             switch state {
             case .ready:
-                reported = true
+                wasReady = true
                 self.port = listener.port?.rawValue
-                completion(.success(self.port ?? port))
-            case .failed(let error), .waiting(let error):
-                reported = true
-                listener.cancel()
-                if self.listener === listener { self.listener = nil }
-                if port != 0 {
-                    self.startListener(port: 0, completion: completion)
+                self.lastPort = self.port
+                self.listenerFailures = 0
+                if let done = completion {
+                    completion = nil
+                    done(.success(self.port ?? port))
                 } else {
-                    completion(.failure(error))
+                    self.onListeningChanged?(self.port)
                 }
-            case .cancelled:
-                reported = true
-                completion(.failure(CancellationError()))
-            default:
+            case .failed(let error):
+                listener.cancel()
+                self.listener = nil
+                if port != 0 && !wasReady {
+                    // Port taken (EADDRINUSE arrives as .failed): an OS-assigned one; pairing URIs carry it.
+                    let handOver = completion
+                    completion = nil  // this listener's .cancelled must not end `start`
+                    self.startListener(port: 0, completion: handOver)
+                } else if let done = completion {
+                    completion = nil
+                    done(.failure(error))
+                } else {
+                    self.listenerFailed()
+                }
+            case .waiting(let error):
+                // No usable network yet, or Local Network access not granted: Network starts it when it can.
+                self.onListenerWaiting?(error)
+            case .setup, .cancelled:
+                break
+            @unknown default:
                 break
             }
         }
         self.listener = listener
         listener.start(queue: queue)
+    }
+
+    /// A listener that was serving died: report it and bring a new one up, with backoff.
+    private func listenerFailed() {
+        port = nil
+        onListeningChanged?(nil)
+        scheduleRestart()
+    }
+
+    private func scheduleRestart() {
+        listenerFailures += 1
+        let delay = min(30, pow(2, Double(listenerFailures - 1)))
+        queue.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.running, self.listener == nil else { return }
+            self.startListener(port: self.lastPort ?? self.configuration.port, completion: nil)
+        }
+    }
+
+    /// Test hook: connections that are not established sessions yet.
+    func pendingCountForTesting() -> Int {
+        queue.sync { pendingHosts.count }
+    }
+
+    /// Test hook: delivers `.failed` to the current listener's state handler, as Network does.
+    func failListenerForTesting() {
+        queue.async { [weak self] in
+            self?.listener?.stateUpdateHandler?(.failed(.posix(.ECONNABORTED)))
+        }
     }
 
     // MARK: Public operations
@@ -185,16 +273,18 @@ public final class DroidDropServer: @unchecked Sendable {
         }
     }
 
-    public func send(_ message: Message, to fingerprint: Data) {
-        queue.async { [weak self] in self?.sessions[fingerprint]?.framed.send(message) }
+    /// Sends to the established session of `fingerprint`; with `session`, only while that session is still it.
+    public func send(_ message: Message, to fingerprint: Data, session: SessionID? = nil) {
+        queue.async { [weak self] in self?.established(fingerprint, session)?.framed.send(message) }
     }
 
-    /// Sends a chunk to the established session of `fingerprint`; `completion(false)` when there is none. Safe from any thread.
-    /// Frames sent through `send(_:to:)` and here leave in call order. `completion` runs on `queue`.
-    public func sendChunk(transferId: String, offset: UInt64, data: Data, to fingerprint: Data,
+    /// Sends a chunk to the established session of `fingerprint` (with `session`, only to that one);
+    /// `completion(false)` when there is none. Safe from any thread.
+    /// Frames sent through `send(_:to:session:)` and here leave in call order. `completion` runs on `queue`.
+    public func sendChunk(transferId: String, offset: UInt64, data: Data, to fingerprint: Data, session id: SessionID? = nil,
                           completion: @escaping @Sendable (Bool) -> Void) {
         queue.async { [weak self] in
-            guard let session = self?.sessions[fingerprint] else { return completion(false) }
+            guard let session = self?.established(fingerprint, id) else { return completion(false) }
             session.framed.send(.chunk(transferId: transferId, offset: offset, data: data), completion: completion)
         }
     }
@@ -207,8 +297,14 @@ public final class DroidDropServer: @unchecked Sendable {
     // MARK: Sessions
 
     private func accept(_ connection: NWConnection) {
+        let host = Self.remoteHost(of: connection)
+        guard pendingHosts.values.filter({ $0 == host }).count < configuration.pendingPerHost else {
+            connection.cancel()
+            return
+        }
         let framed = FramedConnection(connection: connection, queue: queue)
         let id = ObjectIdentifier(framed)
+        pendingHosts[id] = host
         var session: Session?
         framed.onEvent = { [weak self, weak framed] event in
             switch event {
@@ -219,7 +315,9 @@ public final class DroidDropServer: @unchecked Sendable {
                 }
                 let machine = ServerSession(serverFingerprint: self.identity.fingerprint, clientFingerprint: fingerprint,
                                             alreadyPaired: self.peers.contains(fingerprint))
-                let newSession = Session(framed: framed, fingerprint: fingerprint, machine: machine)
+                self.nextSessionID += 1
+                let newSession = Session(id: SessionID(value: self.nextSessionID), framed: framed,
+                                         fingerprint: fingerprint, machine: machine)
                 session = newSession
                 framed.send(.hello(v: 1, name: self.configuration.name, platform: .macos))
                 self.startWatchdog(for: newSession)
@@ -230,13 +328,23 @@ public final class DroidDropServer: @unchecked Sendable {
                 if let session { self?.unregister(session) }
                 session = nil
                 self?.connections[id] = nil
+                self?.pendingHosts[id] = nil
             }
         }
         connections[id] = framed
-        queue.asyncAfter(deadline: .now() + configuration.idleTimeout) { [weak framed] in
-            if session == nil { framed?.cancel() }
+        // Shorter than idleTimeout: an unauthenticated socket (no TLS, or an unpaired session in an open pairing
+        // window) must not be held for 90 s.
+        queue.asyncAfter(deadline: .now() + configuration.handshakeTimeout) { [weak self, weak framed] in
+            guard let self, let framed else { return }
+            if let session, self.sessions[session.fingerprint] === session { return }
+            framed.cancel()
         }
         framed.start()
+    }
+
+    private static func remoteHost(of connection: NWConnection) -> String {
+        if case .hostPort(let host, _) = connection.endpoint { return "\(host)" }
+        return "\(connection.endpoint)"
     }
 
     private func handle(_ frame: Frame, in session: Session) {
@@ -304,8 +412,9 @@ public final class DroidDropServer: @unchecked Sendable {
             onSessionEnded?(session.fingerprint)
         }
         sessions[session.fingerprint] = session
+        pendingHosts[ObjectIdentifier(session.framed)] = nil
         onConnectedPeersChanged?(currentConnectedPeers())
-        onSessionStarted?(session.fingerprint)
+        onSessionStarted?(session.fingerprint, session.id)
     }
 
     private func unregister(_ session: Session) {
@@ -313,6 +422,11 @@ public final class DroidDropServer: @unchecked Sendable {
         sessions[session.fingerprint] = nil
         onConnectedPeersChanged?(currentConnectedPeers())
         onSessionEnded?(session.fingerprint)
+    }
+
+    private func established(_ fingerprint: Data, _ id: SessionID?) -> Session? {
+        guard let session = sessions[fingerprint], id == nil || session.id == id else { return nil }
+        return session
     }
 
     private func currentConnectedPeers() -> [Peer] {

@@ -47,6 +47,21 @@ import Testing
         }
     }
 
+    @Test func stalePartialsArePrunedWhenASessionStarts() async throws {
+        // The app runs for weeks at login: pruning only at launch would let abandoned partials pile up.
+        let h = try await start()
+        defer { h.server.stop() }
+        let partials = directory.appending(path: "partials")
+        try FileManager.default.createDirectory(at: partials, withIntermediateDirectories: true)
+        let stale = partials.appending(path: String(repeating: "a", count: 64) + "-10.part")
+        try Data(count: 10).write(to: stale)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-8 * 86_400)], ofItemAtPath: stale.path)
+
+        _ = try await reconnect(h)
+        h.transfers.queue.sync {}
+        #expect(!FileManager.default.fileExists(atPath: stale.path))
+    }
+
     @Test func phoneFileLandsInDestination() async throws {
         let h = try await start()
         defer { h.server.stop() }
@@ -155,6 +170,45 @@ import Testing
         #expect(secondId != firstId)
         #expect(name == "note.txt")
         #expect(secondSha == sha256)
+    }
+
+    /// SPEC §5 rule 6: a new session replaces the old one. Frames the old session's sender still produces must not
+    /// reach the new connection (Android drops a session that gets a chunk before its pong).
+    @Test func replacedSessionsFramesNeverReachTheNewSession() async throws {
+        let h = try await start()
+        defer { h.server.stop() }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appending(path: "big.bin")
+        try Data((0..<(8 * FrameLimits.maxChunkData)).map { UInt8(truncatingIfNeeded: $0 &* 7) }).write(to: url)
+
+        h.transfers.send([url], to: base.phone.fingerprint)
+        guard case let .fileOffer(oldId, _, _, _, _) = try await h.events.nextMessage() else {
+            throw UnexpectedEvent(description: "expected file_offer")
+        }
+        // Hold the transfers queue so the old session's accept is handled (and its chunks pumped) only after the new
+        // session has registered: the order a slow queue or a large file produces on a real network.
+        let gate = DispatchSemaphore(value: 0)
+        h.transfers.queue.async { gate.wait() }
+        h.connection.send(.fileAccept(transferId: oldId, offset: 0))
+        try await Task.sleep(for: .milliseconds(100))
+        let (connection, events) = try await base.reconnect(h.server, port: h.port)
+        connection.send(.ping(id: 1))
+        #expect(try await events.nextMessage() == .pong(id: 1))  // the server has registered the new session
+        gate.signal()
+
+        var sawOldFrame = false
+        while let event = try? await events.next(timeout: 1) {
+            guard case .frame(let frame) = event else { continue }
+            switch frame {
+            case .chunk(let id, _, _): if id == oldId { sawOldFrame = true }
+            case .control(let data):
+                switch try MessageCodec.decode(data) {
+                case .fileDone(let id), .fileCancel(let id): if id == oldId { sawOldFrame = true }
+                default: break
+                }
+            }
+        }
+        #expect(!sawOldFrame)
     }
 
     /// "Pair Again" leaves a queue for a fingerprint that is no longer paired; cancelling must still clear it.

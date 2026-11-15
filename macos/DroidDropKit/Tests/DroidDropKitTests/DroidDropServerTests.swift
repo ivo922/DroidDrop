@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import Testing
 @testable import DroidDropKit
 
@@ -7,11 +8,14 @@ import Testing
 
     func makeServer(peersURL: URL = temporaryDirectory().appending(path: "peers.json"),
                     idleTimeout: TimeInterval = DroidDropServer.idleTimeout,
+                    handshakeTimeout: TimeInterval = DroidDropServer.handshakeTimeout,
+                    pendingPerHost: Int = DroidDropServer.pendingPerHost,
                     configure: (DroidDropServer) -> Void = { _ in }) async throws -> (DroidDropServer, UInt16) {
         let server = DroidDropServer(
             identity: try Identity.generate(commonName: "Mac"),
             peers: try PeerStore(url: peersURL),
-            configuration: .init(name: "Test Mac", port: 0, advertise: false, idleTimeout: idleTimeout)
+            configuration: .init(name: "Test Mac", port: 0, advertise: false, idleTimeout: idleTimeout,
+                                 handshakeTimeout: handshakeTimeout, pendingPerHost: pendingPerHost)
         )
         configure(server)
         return (server, try await server.start())
@@ -216,12 +220,137 @@ import Testing
         #expect(server.connectedPeers().isEmpty)
     }
 
+    // The dev CLI or another app may hold 47321: the server must take another port and advertise it.
+    @Test func fallsBackToAnotherPortWhenTaken() async throws {
+        let blocker = try NWListener(using: .tcp, on: .any)
+        let blockerReady = DispatchSemaphore(value: 0)
+        blocker.stateUpdateHandler = { if case .ready = $0 { blockerReady.signal() } }
+        blocker.newConnectionHandler = { $0.cancel() }
+        blocker.start(queue: DispatchQueue(label: "test.blocker"))
+        defer { blocker.cancel() }
+        #expect(blockerReady.wait(timeout: .now() + 5) == .success)
+        let taken = try #require(blocker.port?.rawValue)
+
+        let server = DroidDropServer(
+            identity: try Identity.generate(commonName: "Mac"),
+            peers: try PeerStore(url: temporaryDirectory().appending(path: "peers.json")),
+            configuration: .init(name: "Test Mac", port: taken, advertise: false)
+        )
+        defer { server.stop() }
+        let port = try await server.start()
+        #expect(port != taken)
+        #expect(server.openPairingWindow(hosts: ["127.0.0.1"]).port == Int(port))
+    }
+
+    // A listener that dies after it was ready (mDNSResponder restart, network teardown) must come back by itself:
+    // otherwise the menu says "No phone connected" while no phone can ever connect.
+    @Test func listenerFailureAfterReadyRestartsIt() async throws {
+        let states = Recorded<UInt16?>()
+        let (server, _) = try await makeServer { $0.onListeningChanged = { states.append($0) } }
+        defer { server.stop() }
+        server.failListenerForTesting()
+        try await eventually { states.values.count >= 2 }
+        #expect(states.values.first == .some(nil))
+        let restarted = try #require(states.values.last ?? nil)
+        let (connection, events) = try await pair(server, port: restarted)
+        connection.send(.ping(id: 1))
+        #expect(try await events.nextMessage() == .pong(id: 1))
+    }
+
+    // A serving listener on the default port that fails must come back on that port (phones remember it), not
+    // fall back to an OS-assigned one as a port taken at startup does.
+    @Test func failedListenerOnAFixedPortComesBackOnIt() async throws {
+        let probe = try NWListener(using: .tcp, on: .any)
+        let probed = DispatchSemaphore(value: 0)
+        probe.stateUpdateHandler = { if case .ready = $0 { probed.signal() } }
+        probe.newConnectionHandler = { $0.cancel() }
+        probe.start(queue: DispatchQueue(label: "test.probe"))
+        #expect(probed.wait(timeout: .now() + 5) == .success)
+        let fixed = try #require(probe.port?.rawValue)
+        probe.cancel()
+        try await Task.sleep(for: .milliseconds(200))
+
+        let states = Recorded<UInt16?>()
+        let server = DroidDropServer(
+            identity: try Identity.generate(commonName: "Mac"),
+            peers: try PeerStore(url: temporaryDirectory().appending(path: "peers.json")),
+            configuration: .init(name: "Test Mac", port: fixed, advertise: false)
+        )
+        server.onListeningChanged = { states.append($0) }
+        defer { server.stop() }
+        #expect(try await server.start() == fixed)
+        server.failListenerForTesting()
+        try await eventually { states.values.count >= 2 }
+        #expect(states.values.first == .some(nil))
+        #expect(states.values.last == .some(fixed))
+    }
+
+    @Test func stopBeforeReadyEndsStart() async throws {
+        let server = DroidDropServer(
+            identity: try Identity.generate(commonName: "Mac"),
+            peers: try PeerStore(url: temporaryDirectory().appending(path: "peers.json")),
+            configuration: .init(name: "Test Mac", port: 0, advertise: false)
+        )
+        let result = Recorded<Bool>()
+        server.start { result.append((try? $0.get()) != nil) }
+        server.stop()
+        try await eventually { !result.values.isEmpty }
+        #expect(result.values.count == 1)
+    }
+
+    // A LAN device that opens sockets and never finishes TLS must not hold them for the 90 s idle timeout.
+    @Test func silentConnectionIsClosedAfterHandshakeTimeout() async throws {
+        let (server, port) = try await makeServer(handshakeTimeout: 0.5)
+        defer { server.stop() }
+        let raw = RawClient(port: port)
+        defer { raw.cancel() }
+        try await eventually(timeout: 3) { raw.closed }
+    }
+
+    @Test func unpairedSessionIsClosedAfterHandshakeTimeout() async throws {
+        let (server, port) = try await makeServer(handshakeTimeout: 0.5)
+        defer { server.stop() }
+        _ = server.openPairingWindow(hosts: ["127.0.0.1"])
+        let (_, events) = try TestClient.connect(port: port, identity: phone, pinnedServer: server.identity.fingerprint)
+        #expect(try await events.nextMessage() == .hello(v: 1, name: "Test Mac", platform: .macos))
+        let started = ContinuousClock.now
+        try await events.expectClosed()
+        #expect(ContinuousClock.now - started < .seconds(3))
+    }
+
+    // One device cannot take more than `pendingPerHost` unauthenticated sockets, so it cannot lock out the phone's.
+    @Test func pendingConnectionsPerHostAreCapped() async throws {
+        let (server, port) = try await makeServer(handshakeTimeout: 30, pendingPerHost: 2)
+        defer { server.stop() }
+        let first = RawClient(port: port)
+        let second = RawClient(port: port)
+        defer { first.cancel(); second.cancel() }
+        try await eventually { server.pendingCountForTesting() == 2 }
+        let third = RawClient(port: port)
+        defer { third.cancel() }
+        try await eventually(timeout: 3) { third.closed }
+        #expect(!first.closed)
+        #expect(!second.closed)
+    }
+
+    @Test func pairedSessionDoesNotCountAsPending() async throws {
+        let (server, port) = try await makeServer(handshakeTimeout: 30, pendingPerHost: 1)
+        defer { server.stop() }
+        let (connection, events) = try await pair(server, port: port)
+        connection.send(.ping(id: 1))
+        #expect(try await events.nextMessage() == .pong(id: 1))
+        let raw = RawClient(port: port)
+        defer { raw.cancel() }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(!raw.closed)
+    }
+
     // MARK: Sessions and chunks
 
     @Test func reportsSessionStartAndEnd() async throws {
         let log = Recorded<String>()
         let (server, port) = try await makeServer { server in
-            server.onSessionStarted = { _ in log.append("start") }
+            server.onSessionStarted = { _, _ in log.append("start") }
             server.onSessionEnded = { _ in log.append("end") }
         }
         defer { server.stop() }
@@ -235,7 +364,7 @@ import Testing
     @Test func replacedSessionEndsBeforeNewOneStarts() async throws {
         let log = Recorded<String>()
         let (server, port) = try await makeServer { server in
-            server.onSessionStarted = { _ in log.append("start") }
+            server.onSessionStarted = { _, _ in log.append("start") }
             server.onSessionEnded = { _ in log.append("end") }
         }
         defer { server.stop() }

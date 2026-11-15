@@ -1,10 +1,12 @@
 package dev.ivo.droiddrop.devcli
 
+import dev.ivo.droiddrop.core.clipboard.ClipOutbox
 import dev.ivo.droiddrop.core.pairing.Base64Url
 import dev.ivo.droiddrop.core.pairing.PairUri
 import dev.ivo.droiddrop.core.protocol.Frame
 import dev.ivo.droiddrop.core.protocol.Message
 import dev.ivo.droiddrop.core.protocol.MessageCodec
+import dev.ivo.droiddrop.core.protocol.ProtocolException
 import dev.ivo.droiddrop.core.session.DroidDropClient
 import dev.ivo.droiddrop.core.session.MessageSender
 import dev.ivo.droiddrop.core.session.SessionListener
@@ -54,6 +56,7 @@ fun main(args: Array<String>) {
         "connect" -> connect(client, home, ping = "--ping" in args)
         "send" -> send(client, home, args.drop(1).ifEmpty { usage() })
         "receive" -> receive(client, home, args.drop(1))
+        "clip" -> clip(client, home, args.getOrNull(1) ?: usage())
         else -> usage()
     }
 }
@@ -61,7 +64,7 @@ fun main(args: Array<String>) {
 private fun usage(): Nothing {
     System.err.println(
         "usage: devcli pair '<droiddrop://pair?...>' | devcli connect [--ping] | devcli send <file>... | " +
-            "devcli receive <dir> [--count N]",
+            "devcli receive <dir> [--count N] | devcli clip <text>",
     )
     exitProcess(2)
 }
@@ -83,6 +86,14 @@ private fun pair(client: DroidDropClient, home: File, uriText: String) {
                 })
             }
         } catch (e: Done) {
+            return
+        } catch (e: ProtocolException) {
+            if (e.code != ProtocolException.ALREADY_PAIRED) {
+                println("ERROR $host: ${e.message}")
+                continue
+            }
+            saveServer(home, SavedServer(uri.name, uri.fingerprint, host, uri.port))
+            println("ALREADY_PAIRED ${uri.name}")
             return
         } catch (e: Exception) {
             println("ERROR $host: ${e.message}")
@@ -117,6 +128,36 @@ private fun connect(client: DroidDropClient, home: File, ping: Boolean) {
         println("ERROR ${e.message}")
         exitProcess(1)
     }
+}
+
+/** Sends one clip as an explicit tap would: prints SENT, or NOT_SENT <decision> and exits 1. */
+private fun clip(client: DroidDropClient, home: File, text: String) {
+    val server = loadServer(home) ?: run { println("ERROR not paired"); exitProcess(1) }
+    var sent = false
+    try {
+        runBlocking {
+            client.run(server.host, server.port, Base64Url.decode32(server.fingerprint)!!, null, object : SessionListener {
+                override fun onConnected(serverName: String, sender: MessageSender) {
+                    println("CONNECTED $serverName")
+                    when (val decision = ClipOutbox().decide(text, automatic = false)) {
+                        is ClipOutbox.Decision.Send -> {
+                            sender.send(decision.clip)
+                            sent = true
+                            println("SENT")
+                        }
+                        else -> println("NOT_SENT $decision")
+                    }
+                    throw Done()
+                }
+            })
+        }
+        println("CLOSED")
+    } catch (e: Done) {
+        // Session ended on purpose.
+    } catch (e: Exception) {
+        println("ERROR ${oneLine(e.message ?: e.toString())}")
+    }
+    if (!sent) exitProcess(1)
 }
 
 /** Stdout lines are one event each, so embedded newlines would split them. */
