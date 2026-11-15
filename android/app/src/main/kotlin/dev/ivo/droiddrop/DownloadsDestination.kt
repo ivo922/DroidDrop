@@ -3,7 +3,6 @@ package dev.ivo.droiddrop
 import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
-import android.os.Environment
 import android.provider.MediaStore
 import android.webkit.MimeTypeMap
 import dev.ivo.droiddrop.core.transfer.Destination
@@ -20,7 +19,7 @@ class DownloadsDestination(private val context: Context) : Destination {
         val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-            put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/DroidDrop")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, ReceivedFiles.RELATIVE_PATH)
             put(MediaStore.MediaColumns.MIME_TYPE, mimeFor(name))
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }

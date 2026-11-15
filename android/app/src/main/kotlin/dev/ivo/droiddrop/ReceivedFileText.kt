@@ -30,6 +30,10 @@ object ReceivedFileText {
         }
     }
 
+    /** The "nothing here" text: only once the list has loaded and is empty, so it never flashes before the first query. */
+    fun placeholder(loaded: Boolean, empty: Boolean): String? =
+        if (loaded && empty) "Files you receive from your Mac appear here." else null
+
     /** Toast when a row cannot be opened: no viewer app (R7), or the file was deleted since the list was loaded. */
     fun openFailure(name: String, fileGone: Boolean): String =
         if (fileGone) "$name is no longer available." else "No app can open $name."

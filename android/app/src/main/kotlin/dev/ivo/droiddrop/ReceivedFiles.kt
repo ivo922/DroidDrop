@@ -3,7 +3,6 @@ package dev.ivo.droiddrop
 import android.content.ContentUris
 import android.content.Context
 import android.net.Uri
-import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
 
@@ -14,8 +13,11 @@ data class ReceivedFile(val uri: Uri, val name: String, val size: Long, val adde
 object ReceivedFiles {
     private const val TAG = "ReceivedFiles"
 
-    /** MediaStore stores RELATIVE_PATH with a trailing slash. */
-    val relativePath: String = "${Environment.DIRECTORY_DOWNLOADS}/DroidDrop/"
+    /** Where DownloadsDestination saves and this lists, spelled as MediaStore stores it (with the trailing slash). */
+    const val RELATIVE_PATH = "Download/DroidDrop/"
+
+    /** DATE_ADDED has one-second resolution, so `_id` keeps a multi-file drop in a stable order. */
+    const val SORT_ORDER = "${MediaStore.MediaColumns.DATE_ADDED} DESC, ${MediaStore.MediaColumns._ID} DESC"
 
     /** The app's own non-pending rows there, newest first (R4). Empty on any failure. Blocking. */
     fun query(context: Context): List<ReceivedFile> = try {
@@ -28,8 +30,7 @@ object ReceivedFiles {
             MediaStore.MediaColumns.MIME_TYPE,
         )
         val selection = "${MediaStore.MediaColumns.RELATIVE_PATH} = ? AND ${MediaStore.MediaColumns.IS_PENDING} = 0"
-        val order = "${MediaStore.MediaColumns.DATE_ADDED} DESC"
-        context.contentResolver.query(collection, columns, selection, arrayOf(relativePath), order)?.use { cursor ->
+        context.contentResolver.query(collection, columns, selection, arrayOf(RELATIVE_PATH), SORT_ORDER)?.use { cursor ->
             buildList {
                 while (cursor.moveToNext()) {
                     add(

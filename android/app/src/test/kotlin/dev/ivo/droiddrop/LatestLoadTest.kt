@@ -1,5 +1,6 @@
 package dev.ivo.droiddrop
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,11 +19,17 @@ class LatestLoadTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val slowFirst = CompletableDeferred<String>()
         val started = CompletableDeferred<Unit>()
+        val firstCancelled = CompletableDeferred<Unit>()
         var calls = 0
         val latest = LatestLoad(scope, clock = { 0L }) {
             if (++calls == 1) {
                 started.complete(Unit)
-                slowFirst.await()
+                try {
+                    slowFirst.await()
+                } catch (e: CancellationException) {
+                    firstCancelled.complete(Unit)
+                    throw e
+                }
             } else {
                 "second"
             }
@@ -31,9 +38,10 @@ class LatestLoadTest {
             latest.refresh()
             withTimeout(5_000) { started.await() }
             latest.refresh()
+            // The newer refresh cancels the stale load, so it can never land late and overwrite "second".
+            withTimeout(5_000) { firstCancelled.await() }
             withTimeout(5_000) { latest.snapshot.filterNotNull().first { it.value == "second" } }
-            slowFirst.complete("first") // the stale load finishing late must not overwrite the newer result
-            kotlinx.coroutines.delay(100)
+            slowFirst.complete("first")
             assertEquals("second", latest.snapshot.value?.value)
         } finally {
             scope.cancel()

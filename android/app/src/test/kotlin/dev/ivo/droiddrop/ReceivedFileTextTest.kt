@@ -45,6 +45,14 @@ class ReceivedFileTextTest {
     }
 
     @Test
+    fun placeholderOnlyOnceLoaded() {
+        // Before the first query returns there is no answer yet, so no "nothing here" text may flash.
+        assertEquals(null, ReceivedFileText.placeholder(loaded = false, empty = true))
+        assertEquals("Files you receive from your Mac appear here.", ReceivedFileText.placeholder(loaded = true, empty = true))
+        assertEquals(null, ReceivedFileText.placeholder(loaded = true, empty = false))
+    }
+
+    @Test
     fun fileKinds() {
         assertEquals(FileKind.IMAGE, FileKind.of("image/jpeg", "a.jpg"))
         assertEquals(FileKind.VIDEO, FileKind.of("video/mp4", "a.mp4"))

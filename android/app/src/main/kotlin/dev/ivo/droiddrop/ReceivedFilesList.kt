@@ -1,5 +1,8 @@
 package dev.ivo.droiddrop
 
+import android.content.Context
+import android.net.Uri
+import android.os.CancellationSignal
 import android.text.format.Formatter
 import android.util.Size
 import androidx.compose.foundation.Image
@@ -28,11 +31,35 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.job
 import kotlinx.coroutines.withContext
 import java.time.ZoneId
 
 private val TileSize = 48.dp
+
+/** Process-wide, so thumbnails survive scrolling and rotation. 16 MiB is about 200 tiles at xxhdpi. */
+private val thumbnails = ThumbnailCache<Pair<Uri, Int>, ImageBitmap>(16L shl 20) { it.width.toLong() * it.height * 4 }
+
+/**
+ * A [px]-square thumbnail, or null when there is none. Cancelled with the calling coroutine (a row scrolled away), so
+ * a fast fling past many videos does not leave decoding work queued.
+ */
+private suspend fun loadThumbnail(context: Context, uri: Uri, px: Int): ImageBitmap? {
+    val signal = CancellationSignal()
+    val cancelOnLeave = currentCoroutineContext().job.invokeOnCompletion { if (it != null) signal.cancel() }
+    return try {
+        context.contentResolver.loadThumbnail(uri, Size(px, px), signal).asImageBitmap()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        null // no thumbnail for this file (or the load was cancelled): the kind's emoji stays
+    } finally {
+        cancelOnLeave.dispose()
+    }
+}
 
 /** Thumbnail or kind tile, name and detail line, size. The whole row opens the file. */
 @Composable
@@ -61,11 +88,10 @@ private fun FileTile(file: ReceivedFile) {
     val context = LocalContext.current
     val kind = FileKind.of(file.mime, file.name)
     val px = with(LocalDensity.current) { TileSize.roundToPx() }
-    val thumbnail by produceState<ImageBitmap?>(null, file.uri) {
-        if (!kind.hasThumbnail) return@produceState
-        value = withContext(Dispatchers.IO) {
-            runCatching { context.contentResolver.loadThumbnail(file.uri, Size(px, px), null).asImageBitmap() }.getOrNull()
-        }
+    val key = file.uri to px
+    val thumbnail by produceState(thumbnails.get(key), key) {
+        if (!kind.hasThumbnail || value != null) return@produceState
+        value = withContext(Dispatchers.IO) { loadThumbnail(context, file.uri, px) }?.also { thumbnails.put(key, it) }
     }
     Box(
         modifier = Modifier.size(TileSize).clip(RoundedCornerShape(8.dp)),
