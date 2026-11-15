@@ -52,6 +52,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate, NSMenuItemValidation
         showTransfers(model.transferLines, isSending: model.isSending)
         menu.addItem(item("Send Files…", #selector(sendFiles)))
         menu.addItem(cancelSendingItem)
+        menu.addItem(item("Open Received Files", #selector(openReceivedFiles)))
         menu.addItem(.separator())
 
         menu.addItem(item("Pair New Phone…", #selector(pair)))
@@ -105,6 +106,14 @@ final class StatusMenuController: NSObject, NSMenuDelegate, NSMenuItemValidation
         panel.allowsMultipleSelection = true
         guard panel.runModal() == .OK else { return }
         model.sendFiles(panel.urls)
+    }
+
+    @objc private func openReceivedFiles() {
+        guard let message = model.openReceivedFiles() else { return }
+        let alert = NSAlert()
+        alert.messageText = "Could not open the received files folder"
+        alert.informativeText = message
+        alert.runModal()
     }
 
     @objc private func cancelSending() {

@@ -1,6 +1,6 @@
+import AppKit
 import Combine
 import DroidDropKit
-import Foundation
 
 /// Menu-bar state for the local server.
 ///
@@ -27,6 +27,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var isSending = false
 
     let macCode: String
+    /// `~/Downloads/DroidDrop`, shared with FileTransfers so the menu opens where files land (R6).
+    let receivedFilesFolder = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+        .appending(path: "DroidDrop")
     private let server: DroidDropServer?
     private var clipboard: ClipboardMonitor?
     private var transfers: FileTransfers?
@@ -58,7 +61,7 @@ final class AppModel: ObservableObject {
         let transfers = FileTransfers(
             server: server,
             partials: PartialStore(directory: support.appending(path: "partials")),
-            destination: FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0].appending(path: "DroidDrop")
+            destination: receivedFilesFolder
         )
         self.transfers = transfers
         server.onMessage = { [weak self, weak transfers] peer, message in
@@ -196,6 +199,17 @@ final class AppModel: ObservableObject {
     /// Cancels the active file and drops the queue, including files waiting for a disconnected phone.
     func cancelSending() {
         transfers?.cancelAllSending()
+    }
+
+    /// Creates the folder if missing (nothing received yet) and opens it in Finder. Returns the message to show on failure.
+    @discardableResult
+    func openReceivedFiles() -> String? {
+        do {
+            try FileManager.default.createDirectory(at: receivedFilesFolder, withIntermediateDirectories: true)
+        } catch {
+            return Self.describe(error)
+        }
+        return NSWorkspace.shared.open(receivedFilesFolder) ? nil : "Finder could not open \(receivedFilesFolder.path)"
     }
 
     func isConnected(_ peer: Peer) -> Bool {
