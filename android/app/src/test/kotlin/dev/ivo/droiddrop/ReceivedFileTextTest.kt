@@ -39,6 +39,12 @@ class ReceivedFileTextTest {
     }
 
     @Test
+    fun openFailureMessages() {
+        assertEquals("No app can open README.", ReceivedFileText.openFailure("README", fileGone = false))
+        assertEquals("report.pdf is no longer available.", ReceivedFileText.openFailure("report.pdf", fileGone = true))
+    }
+
+    @Test
     fun fileKinds() {
         assertEquals(FileKind.IMAGE, FileKind.of("image/jpeg", "a.jpg"))
         assertEquals(FileKind.VIDEO, FileKind.of("video/mp4", "a.mp4"))

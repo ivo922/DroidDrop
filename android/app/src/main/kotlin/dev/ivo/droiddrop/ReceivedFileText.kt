@@ -30,6 +30,10 @@ object ReceivedFileText {
         }
     }
 
+    /** Toast when a row cannot be opened: no viewer app (R7), or the file was deleted since the list was loaded. */
+    fun openFailure(name: String, fileGone: Boolean): String =
+        if (fileGone) "$name is no longer available." else "No app can open $name."
+
     /** "JPG · Today 14:02", or just the date when the name has no extension. */
     fun detail(name: String, addedMillis: Long, nowMillis: Long, zone: ZoneId): String {
         val date = date(addedMillis, nowMillis, zone)

@@ -55,7 +55,12 @@ class MainActivity : ComponentActivity() {
     private var scanAfterLocalNetworkGrant = false
     private var permissionRequestOpen = false
     private lateinit var store: PairingStore
-    private var received by mutableStateOf(emptyList<ReceivedFile>())
+    /** Download/DroidDrop/ rows plus the time they were read, so date labels move on at every refresh. */
+    private val receivedList by lazy {
+        LatestLoad(lifecycleScope, System::currentTimeMillis) {
+            withContext(Dispatchers.IO) { ReceivedFiles.query(this@MainActivity) }
+        }
+    }
     private val clipboard by lazy { getSystemService(ClipboardManager::class.java) }
 
     // Only a focused app may read the clipboard, so automatic sends run only while this screen is in front.
@@ -106,6 +111,7 @@ class MainActivity : ComponentActivity() {
                     phoneCode = code
                 }
                 val paired = remember(state) { store.load() != null }
+                val received by receivedList.snapshot.collectAsStateWithLifecycle()
                 MainScreen(
                     state = state,
                     paired = paired,
@@ -114,7 +120,8 @@ class MainActivity : ComponentActivity() {
                     onSendFiles = { filePicker.launch(arrayOf("*/*")) },
                     onUnpair = ::unpair,
                     onAllowBackground = ::requestBatteryExemption,
-                    received = received,
+                    received = received?.value.orEmpty(),
+                    nowMillis = received?.atMillis ?: 0L,
                     onOpen = ::openReceived,
                 )
             }
@@ -203,16 +210,22 @@ class MainActivity : ComponentActivity() {
         AndroidIdentity.enqueueDelete()
     }
 
-    private fun refreshReceived() {
-        lifecycleScope.launch { received = withContext(Dispatchers.IO) { ReceivedFiles.query(this@MainActivity) } }
-    }
+    private fun refreshReceived() = receivedList.refresh()
 
     private fun openReceived(file: ReceivedFile) {
-        try {
+        val fileGone = try {
             startActivity(FileViewer.intent(this, file.uri))
+            return
         } catch (e: ActivityNotFoundException) {
-            Toast.makeText(this, "No app can open ${file.name}.", Toast.LENGTH_LONG).show()
+            false
+        } catch (e: SecurityException) {
+            // MediaStore refuses the read grant for a row deleted since the list loaded.
+            true
+        } catch (e: IllegalArgumentException) {
+            true
         }
+        Toast.makeText(this, ReceivedFileText.openFailure(file.name, fileGone), Toast.LENGTH_LONG).show()
+        if (fileGone) refreshReceived()
     }
 
     private fun requestBatteryExemption() {
@@ -230,6 +243,7 @@ private fun MainScreen(
     onUnpair: () -> Unit,
     onAllowBackground: () -> Unit,
     received: List<ReceivedFile>,
+    nowMillis: Long,
     onOpen: (ReceivedFile) -> Unit,
 ) {
     Scaffold { padding ->
@@ -258,8 +272,7 @@ private fun MainScreen(
             if (received.isEmpty()) {
                 item { Text("Files you receive from your Mac appear here.", style = MaterialTheme.typography.bodyMedium) }
             } else {
-                // One "now" for the whole list, so rows around midnight agree on Today and Yesterday.
-                val nowMillis = System.currentTimeMillis()
+                // One "now" for the whole list (stamped at the last refresh), so rows agree on Today and Yesterday.
                 items(received, key = { it.uri }) { file -> ReceivedFileRow(file, nowMillis, onOpen) }
             }
         }
