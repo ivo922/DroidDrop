@@ -9,30 +9,15 @@ import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -88,12 +73,13 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         store = PairingStore(this)
         requestMissingPermissions()
 
         setContent {
-            MaterialTheme {
+            DroidDropTheme {
                 val state by ConnectionStatus.state.collectAsStateWithLifecycle()
                 val generation by AndroidIdentity.generation.collectAsStateWithLifecycle()
                 var phoneCode by remember { mutableStateOf("…") }
@@ -226,51 +212,5 @@ class MainActivity : ComponentActivity() {
 
     private fun requestBatteryExemption() {
         startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, "package:$packageName".toUri()))
-    }
-}
-
-@Composable
-private fun MainScreen(
-    state: ConnectionState,
-    paired: Boolean,
-    phoneCode: String,
-    onPair: () -> Unit,
-    onSendFiles: () -> Unit,
-    onUnpair: () -> Unit,
-    onAllowBackground: () -> Unit,
-    received: List<ReceivedFile>?,
-    nowMillis: Long,
-    onOpen: (ReceivedFile) -> Unit,
-) {
-    Scaffold { padding ->
-        LazyColumn(
-            modifier = Modifier.padding(padding).fillMaxSize(),
-            contentPadding = PaddingValues(24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            item { Text("DroidDrop", style = MaterialTheme.typography.headlineMedium) }
-            item { Text(state.describe(), style = MaterialTheme.typography.titleMedium) }
-            if (!paired || state is ConnectionState.Failed) {
-                item { Button(onClick = onPair) { Text(if (paired) "Pair again" else "Pair with Mac") } }
-            }
-            if (paired) {
-                item { Button(onClick = onSendFiles) { Text("Send files") } }
-                item { OutlinedButton(onClick = onUnpair) { Text("Unpair") } }
-            }
-            item { OutlinedButton(onClick = onAllowBackground) { Text("Allow running in background") } }
-            item {
-                // Selectable so the automatic clipboard send can be tried on a device.
-                SelectionContainer {
-                    Text("Phone code: $phoneCode", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-                }
-            }
-            item { Text("Received", style = MaterialTheme.typography.titleMedium) }
-            // Null until the first query returns: show nothing rather than a "nothing here" that may be wrong.
-            ReceivedFileText.placeholder(loaded = received != null, empty = received.isNullOrEmpty())?.let { text ->
-                item { Text(text, style = MaterialTheme.typography.bodyMedium) }
-            }
-            // One "now" for the whole list (stamped at the last refresh), so rows agree on Today and Yesterday.
-            items(received.orEmpty(), key = { it.uri }) { file -> ReceivedFileRow(file, nowMillis, onOpen) }
-        }
     }
 }

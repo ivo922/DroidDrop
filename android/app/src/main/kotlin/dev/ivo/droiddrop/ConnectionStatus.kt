@@ -18,6 +18,15 @@ fun ConnectionState.describe(): String = when (this) {
     is ConnectionState.Failed -> message
 }
 
+/** The line under [describe] on the main screen, or null when the title says it all. */
+fun ConnectionState.hint(): String? = when (this) {
+    ConnectionState.Unpaired -> "On your Mac, choose Pair New Phone… and scan its code"
+    is ConnectionState.Pairing -> null
+    is ConnectionState.Searching -> "Keep DroidDrop running on your Mac, on the same network"
+    is ConnectionState.Connected -> "Files and clipboard sync over Wi-Fi"
+    is ConnectionState.Failed -> null
+}
+
 /** The state to show when the service starts to reconnect: a fresh process says Unpaired until told otherwise. */
 fun ConnectionState.onServiceStart(savedMacName: String?): ConnectionState =
     if (this == ConnectionState.Unpaired && savedMacName != null) ConnectionState.Searching(savedMacName) else this

@@ -64,4 +64,10 @@ class ReceivedFileTextTest {
         assertTrue(FileKind.IMAGE.hasThumbnail && FileKind.VIDEO.hasThumbnail)
         assertFalse(FileKind.DOCUMENT.hasThumbnail)
     }
+
+    @Test
+    fun countLabels() {
+        assertEquals("1 file", ReceivedFileText.count(1))
+        assertEquals("7 files", ReceivedFileText.count(7))
+    }
 }

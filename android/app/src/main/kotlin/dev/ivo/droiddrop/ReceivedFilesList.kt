@@ -6,13 +6,10 @@ import android.os.CancellationSignal
 import android.text.format.Formatter
 import android.util.Size
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -61,24 +58,25 @@ private suspend fun loadThumbnail(context: Context, uri: Uri, px: Int): ImageBit
     }
 }
 
-/** Thumbnail or kind tile, name and detail line, size. The whole row opens the file. */
+/** Thumbnail or kind tile, name and detail line, size; row [index] of [count] in the grouped list. The whole row opens the file. */
 @Composable
-fun ReceivedFileRow(file: ReceivedFile, nowMillis: Long, onOpen: (ReceivedFile) -> Unit) {
+fun ReceivedFileRow(file: ReceivedFile, nowMillis: Long, onOpen: (ReceivedFile) -> Unit, index: Int, count: Int) {
     val context = LocalContext.current
-    Row(
-        modifier = Modifier.fillMaxWidth().clickable { onOpen(file) }.padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    SegmentRow(index = index, count = count, onClick = { onOpen(file) }, minHeight = 72.dp) {
         FileTile(file)
-        Column(modifier = Modifier.weight(1f)) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(file.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
                 ReceivedFileText.detail(file.name, file.addedMillis, nowMillis, ZoneId.systemDefault()),
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Text(Formatter.formatShortFileSize(context, file.size), style = MaterialTheme.typography.bodySmall)
+        Text(
+            Formatter.formatShortFileSize(context, file.size),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -94,7 +92,10 @@ private fun FileTile(file: ReceivedFile) {
         value = withContext(Dispatchers.IO) { loadThumbnail(context, file.uri, px) }?.also { thumbnails.put(key, it) }
     }
     Box(
-        modifier = Modifier.size(TileSize).clip(RoundedCornerShape(8.dp)),
+        modifier = Modifier
+            .size(TileSize)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest),
         contentAlignment = Alignment.Center,
     ) {
         val image = thumbnail

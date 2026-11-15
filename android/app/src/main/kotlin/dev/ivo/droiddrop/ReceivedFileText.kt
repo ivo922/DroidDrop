@@ -34,6 +34,9 @@ object ReceivedFileText {
     fun placeholder(loaded: Boolean, empty: Boolean): String? =
         if (loaded && empty) "Files you receive from your Mac appear here." else null
 
+    /** The count beside the Received heading: "1 file", "7 files". */
+    fun count(files: Int): String = if (files == 1) "1 file" else "$files files"
+
     /** Toast when a row cannot be opened: no viewer app (R7), or the file was deleted since the list was loaded. */
     fun openFailure(name: String, fileGone: Boolean): String =
         if (fileGone) "$name is no longer available." else "No app can open $name."
