@@ -11,12 +11,15 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
@@ -43,6 +46,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var store: PairingStore
     private val receivedFiles: ReceivedFilesModel by viewModels()
     private val clipboard by lazy { getSystemService(ClipboardManager::class.java) }
+    private val receivedViewStore by lazy { ReceivedViewStore(this) }
 
     // Only a focused app may read the clipboard, so automatic sends run only while this screen is in front.
     // A clip the service just applied from the Mac also lands here; ClipOutbox skips it as FromMac.
@@ -94,18 +98,41 @@ class MainActivity : ComponentActivity() {
                 }
                 val paired = remember(state) { store.load() != null }
                 val received by receivedFiles.list.snapshot.collectAsStateWithLifecycle()
-                MainScreen(
-                    state = state,
-                    paired = paired,
-                    phoneCode = phoneCode,
-                    onPair = ::scanPairingCode,
-                    onSendFiles = { filePicker.launch(arrayOf("*/*")) },
-                    onUnpair = ::unpair,
-                    onAllowBackground = ::requestBatteryExemption,
-                    received = received?.value,
-                    nowMillis = received?.atMillis ?: 0L,
-                    onOpen = ::openReceived,
-                )
+                var showAll by rememberSaveable { mutableStateOf(false) }
+                var receivedView by remember { mutableStateOf(receivedViewStore.load()) }
+                // Keeps the main screen's scroll position while View all is open.
+                val screens = rememberSaveableStateHolder()
+                BackHandler(enabled = showAll) { showAll = false }
+                if (showAll) {
+                    ReceivedFilesScreen(
+                        received = received?.value,
+                        nowMillis = received?.atMillis ?: 0L,
+                        view = receivedView,
+                        onViewChange = {
+                            receivedView = it
+                            receivedViewStore.save(it)
+                        },
+                        onBack = { showAll = false },
+                        onOpen = ::openReceived,
+                    )
+                } else {
+                    screens.SaveableStateProvider("main") {
+                        MainScreen(
+                            state = state,
+                            paired = paired,
+                            phoneCode = phoneCode,
+                            onPair = ::scanPairingCode,
+                            onSendFiles = { filePicker.launch(arrayOf("*/*")) },
+                            onSendClipboard = ::sendClipboard,
+                            onUnpair = ::unpair,
+                            onAllowBackground = ::requestBatteryExemption,
+                            onViewAll = { showAll = true },
+                            received = received?.value,
+                            nowMillis = received?.atMillis ?: 0L,
+                            onOpen = ::openReceived,
+                        )
+                    }
+                }
             }
         }
         // The list follows Download/DroidDrop/: refreshed on resume and whenever a file arrives.
@@ -182,6 +209,12 @@ class MainActivity : ComponentActivity() {
                     Toast.makeText(this@MainActivity, "Scanner unavailable: ${it.message}", Toast.LENGTH_LONG).show()
                 }
         }
+    }
+
+    // This screen has window focus while its button is tapped, so it reads the clipboard itself (no SendClipboardActivity).
+    private fun sendClipboard() {
+        val (text, sensitive) = OutgoingClip.read(this)
+        OutgoingClip.send(this, text, automatic = false, sensitive = sensitive)
     }
 
     private fun unpair() {

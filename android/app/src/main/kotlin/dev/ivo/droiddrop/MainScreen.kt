@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -29,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,6 +46,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+/** How many of the newest received files the main screen lists; View all shows the rest. */
+private const val RECENT_FILES = 4
+
 @Composable
 fun MainScreen(
     state: ConnectionState,
@@ -51,8 +56,10 @@ fun MainScreen(
     phoneCode: String,
     onPair: () -> Unit,
     onSendFiles: () -> Unit,
+    onSendClipboard: () -> Unit,
     onUnpair: () -> Unit,
     onAllowBackground: () -> Unit,
+    onViewAll: () -> Unit,
     received: List<ReceivedFile>?,
     nowMillis: Long,
     onOpen: (ReceivedFile) -> Unit,
@@ -76,7 +83,7 @@ fun MainScreen(
                     modifier = Modifier.padding(start = 4.dp, top = 24.dp, bottom = 20.dp),
                 )
             }
-            item { StatusCard(state, paired, onPair, onSendFiles) }
+            item { StatusCard(state, paired, onPair, onSendFiles, onSendClipboard) }
 
             item { SectionHeader("This phone") }
             val settings = if (paired) 3 else 2
@@ -115,18 +122,12 @@ fun MainScreen(
 
             item {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 24.dp, bottom = 8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(start = 4.dp, top = 16.dp, bottom = 4.dp).heightIn(min = 40.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Bottom,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text("Received", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-                    if (!received.isNullOrEmpty()) {
-                        Text(
-                            ReceivedFileText.count(received.size),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                    if (!received.isNullOrEmpty()) TextButton(onClick = onViewAll) { Text("View all") }
                 }
             }
             // Null until the first query returns: show nothing rather than a "nothing here" that may be wrong.
@@ -134,7 +135,7 @@ fun MainScreen(
                 item { EmptyReceived(text) }
             }
             // One "now" for the whole list (stamped at the last refresh), so rows agree on Today and Yesterday.
-            val files = received.orEmpty()
+            val files = received.orEmpty().take(RECENT_FILES)
             itemsIndexed(files, key = { _, file -> file.uri }) { index, file ->
                 ReceivedFileRow(file, nowMillis, onOpen, index = index, count = files.size)
             }
@@ -144,7 +145,13 @@ fun MainScreen(
 
 /** What the phone is doing, with the actions that make sense in that state. */
 @Composable
-private fun StatusCard(state: ConnectionState, paired: Boolean, onPair: () -> Unit, onSendFiles: () -> Unit) {
+private fun StatusCard(
+    state: ConnectionState,
+    paired: Boolean,
+    onPair: () -> Unit,
+    onSendFiles: () -> Unit,
+    onSendClipboard: () -> Unit,
+) {
     val showPair = !paired || state is ConnectionState.Failed
     Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
         Column(modifier = Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
@@ -157,15 +164,26 @@ private fun StatusCard(state: ConnectionState, paired: Boolean, onPair: () -> Un
                     }
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Buttons share a row while they fit and wrap on narrow screens or large fonts; each fills its row.
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val wide = Modifier.weight(1f).height(48.dp)
+                val padding = PaddingValues(horizontal = 16.dp)
                 if (showPair) {
-                    Button(onClick = onPair, modifier = wide) { ButtonLabel(R.drawable.ic_qr_scan, if (paired) "Pair again" else "Pair with Mac") }
+                    Button(onClick = onPair, modifier = wide, contentPadding = padding) {
+                        ButtonLabel(R.drawable.ic_qr_scan, if (paired) "Pair again" else "Pair with Mac")
+                    }
                 }
                 if (paired && showPair) {
-                    FilledTonalButton(onClick = onSendFiles, modifier = wide) { ButtonLabel(R.drawable.ic_upload, "Send files") }
+                    FilledTonalButton(onClick = onSendFiles, modifier = wide, contentPadding = padding) {
+                        ButtonLabel(R.drawable.ic_upload, "Send files")
+                    }
                 } else if (paired) {
-                    Button(onClick = onSendFiles, modifier = wide) { ButtonLabel(R.drawable.ic_upload, "Send files") }
+                    Button(onClick = onSendFiles, modifier = wide, contentPadding = padding) { ButtonLabel(R.drawable.ic_upload, "Send files") }
+                }
+                if (paired) {
+                    FilledTonalButton(onClick = onSendClipboard, modifier = wide, contentPadding = padding) {
+                        ButtonLabel(R.drawable.ic_clipboard, "Send clipboard")
+                    }
                 }
             }
         }
@@ -197,7 +215,7 @@ private fun StatusBadge(state: ConnectionState) {
 @Composable
 private fun ButtonLabel(icon: Int, text: String) {
     Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(20.dp))
-    Text(text, modifier = Modifier.padding(start = 8.dp))
+    Text(text, modifier = Modifier.padding(start = 8.dp), maxLines = 1)
 }
 
 @Composable
@@ -211,7 +229,7 @@ private fun SectionHeader(text: String) {
 }
 
 @Composable
-private fun EmptyReceived(text: String) {
+fun EmptyReceived(text: String) {
     Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 32.dp),
@@ -266,7 +284,8 @@ fun SegmentRow(
     )
 }
 
-private fun segmentShape(index: Int, count: Int): Shape {
+/** Only a grouped list's outer corners are rounded. */
+fun segmentShape(index: Int, count: Int): Shape {
     val top = if (index == 0) 20.dp else 0.dp
     val bottom = if (index == count - 1) 20.dp else 0.dp
     return RoundedCornerShape(topStart = top, topEnd = top, bottomEnd = bottom, bottomStart = bottom)

@@ -41,6 +41,13 @@ object ReceivedFileText {
     fun openFailure(name: String, fileGone: Boolean): String =
         if (fileGone) "$name is no longer available." else "No app can open $name."
 
+    /** "JPG · 14:02" under a day heading on the View all screen, or just the time when the name has no extension. */
+    fun timeDetail(name: String, addedMillis: Long, zone: ZoneId): String {
+        val clock = time.format(Instant.ofEpochMilli(addedMillis).atZone(zone))
+        val extension = extension(name)
+        return if (extension.isEmpty()) clock else "$extension · $clock"
+    }
+
     /** "JPG · Today 14:02", or just the date when the name has no extension. */
     fun detail(name: String, addedMillis: Long, nowMillis: Long, zone: ZoneId): String {
         val date = date(addedMillis, nowMillis, zone)

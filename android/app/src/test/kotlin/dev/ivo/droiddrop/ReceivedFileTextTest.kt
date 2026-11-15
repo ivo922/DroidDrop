@@ -70,4 +70,10 @@ class ReceivedFileTextTest {
         assertEquals("1 file", ReceivedFileText.count(1))
         assertEquals("7 files", ReceivedFileText.count(7))
     }
+
+    @Test
+    fun timeDetailLabels() {
+        assertEquals("JPG · 14:02", ReceivedFileText.timeDetail("IMG_2041.jpg", at("2026-11-13T14:02"), sofia))
+        assertEquals("09:15", ReceivedFileText.timeDetail("README", at("2026-11-12T09:15"), sofia))
+    }
 }

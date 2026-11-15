@@ -10,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -20,12 +21,15 @@ import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CancellationException
@@ -37,8 +41,8 @@ import java.time.ZoneId
 
 private val TileSize = 48.dp
 
-/** Process-wide, so thumbnails survive scrolling and rotation. 16 MiB is about 200 tiles at xxhdpi. */
-private val thumbnails = ThumbnailCache<Pair<Uri, Int>, ImageBitmap>(16L shl 20) { it.width.toLong() * it.height * 4 }
+/** Process-wide, so thumbnails survive scrolling and rotation. 32 MiB is about 400 row tiles or 60 gallery cells at xxhdpi. */
+private val thumbnails = ThumbnailCache<Pair<Uri, Int>, ImageBitmap>(32L shl 20) { it.width.toLong() * it.height * 4 }
 
 /**
  * A [px]-square thumbnail, or null when there is none. Cancelled with the calling coroutine (a row scrolled away), so
@@ -80,29 +84,32 @@ fun ReceivedFileRow(file: ReceivedFile, nowMillis: Long, onOpen: (ReceivedFile) 
     }
 }
 
-/** The kind's emoji (R3), replaced by the MediaStore thumbnail for images and videos once it has loaded. */
+/**
+ * The kind's emoji (R3), replaced by the MediaStore thumbnail for images and videos once it has loaded. [modifier] sizes
+ * and shapes the tile; the thumbnail is loaded as a [thumbnailSize] square.
+ */
 @Composable
-private fun FileTile(file: ReceivedFile) {
+fun FileTile(
+    file: ReceivedFile,
+    modifier: Modifier = Modifier.size(TileSize).clip(RoundedCornerShape(12.dp)),
+    thumbnailSize: Dp = TileSize,
+    emojiSize: TextUnit = 24.sp,
+    background: Color = MaterialTheme.colorScheme.surfaceContainerHighest,
+) {
     val context = LocalContext.current
     val kind = FileKind.of(file.mime, file.name)
-    val px = with(LocalDensity.current) { TileSize.roundToPx() }
+    val px = with(LocalDensity.current) { thumbnailSize.roundToPx() }
     val key = file.uri to px
     val thumbnail by produceState(thumbnails.get(key), key) {
         if (!kind.hasThumbnail || value != null) return@produceState
         value = withContext(Dispatchers.IO) { loadThumbnail(context, file.uri, px) }?.also { thumbnails.put(key, it) }
     }
-    Box(
-        modifier = Modifier
-            .size(TileSize)
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-        contentAlignment = Alignment.Center,
-    ) {
+    Box(modifier = modifier.background(background), contentAlignment = Alignment.Center) {
         val image = thumbnail
         if (image != null) {
-            Image(image, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.size(TileSize))
+            Image(image, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         } else {
-            Text(kind.symbol, fontSize = 24.sp)
+            Text(kind.symbol, fontSize = emojiSize)
         }
     }
 }
