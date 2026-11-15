@@ -42,6 +42,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -215,7 +216,8 @@ private fun StatusBadge(state: ConnectionState) {
 @Composable
 private fun ButtonLabel(icon: Int, text: String) {
     Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(20.dp))
-    Text(text, modifier = Modifier.padding(start = 8.dp), maxLines = 1)
+    // No soft wrap: a label that does not fit moves its button to the next row instead of wrapping to its first word.
+    Text(text, modifier = Modifier.padding(start = 8.dp), maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
 }
 
 @Composable
