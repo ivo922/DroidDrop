@@ -207,7 +207,7 @@ final class AppModel: ObservableObject {
         do {
             try FileManager.default.createDirectory(at: receivedFilesFolder, withIntermediateDirectories: true)
         } catch {
-            return Self.describe(error)
+            return error.localizedDescription // the user-facing text, not the NSError dump describe() gives
         }
         return NSWorkspace.shared.open(receivedFilesFolder) ? nil : "Finder could not open \(receivedFilesFolder.path)"
     }
@@ -238,7 +238,7 @@ final class AppModel: ObservableObject {
             refreshPeers()
             return nil
         } catch {
-            let message = Self.describe(error)
+            let message = error.localizedDescription // shown in an alert and the menu: user-facing text
             unpairError = message
             return message
         }

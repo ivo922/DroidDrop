@@ -113,7 +113,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate, NSMenuItemValidation
         let alert = NSAlert()
         alert.messageText = "Could not open the received files folder"
         alert.informativeText = message
-        alert.runModal()
+        present(alert)
     }
 
     @objc private func cancelSending() {
@@ -136,7 +136,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate, NSMenuItemValidation
         let alert = NSAlert()
         alert.messageText = "Could not unpair"
         alert.informativeText = message
-        alert.runModal()
+        present(alert)
     }
 
     @objc private func toggleLaunchAtLogin() {
@@ -148,7 +148,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate, NSMenuItemValidation
             }
         } catch {
             let alert = NSAlert(error: error)
-            alert.runModal()
+            present(alert)
         }
     }
 
@@ -161,6 +161,13 @@ final class StatusMenuController: NSObject, NSMenuDelegate, NSMenuItemValidation
         image?.isTemplate = true
         statusItem.button?.image = image
         statusItem.button?.toolTip = description
+    }
+
+    /// A menu-bar app is never frontmost on its own: without activating, the alert shows but is not key, so Return
+    /// does not dismiss it.
+    private func present(_ alert: NSAlert) {
+        NSApp.activate()
+        alert.runModal()
     }
 
     private func item(_ title: String, _ action: Selector) -> NSMenuItem {
