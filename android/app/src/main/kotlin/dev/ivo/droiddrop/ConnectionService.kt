@@ -1,14 +1,18 @@
 package dev.ivo.droiddrop
 
+import android.app.KeyguardManager
 import android.app.NotificationManager
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import dev.ivo.droiddrop.core.clipboard.ClipRules
@@ -57,6 +61,23 @@ class ConnectionService : Service() {
     private lateinit var clipboard: ClipboardWriter
     private lateinit var partials: PartialStore
     private lateinit var downloads: DownloadsDestination
+    private lateinit var hold: LockedClipHold
+    /** Lock and unlock, delivered on the main thread like the clip writes they release. */
+    private val lockReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                Intent.ACTION_SCREEN_OFF -> hold.onLocked()
+                Intent.ACTION_SCREEN_ON ->
+                    hold.onScreenOn(getSystemService(KeyguardManager::class.java).isKeyguardLocked)?.let(::applyHeld)
+                Intent.ACTION_USER_PRESENT -> hold.onUnlocked()?.let(::applyHeld)
+            }
+        }
+
+        private fun applyHeld(text: String) {
+            Log.d(TAG, "applied held clip")
+            applyClip(text)
+        }
+    }
     private var loop: Job? = null
 
     override fun onCreate() {
@@ -64,6 +85,15 @@ class ConnectionService : Service() {
         store = PairingStore(this)
         locator = MacLocator(this)
         clipboard = ClipboardWriter.forContext(this)
+        hold = LockedClipHold(lockedNow(), ClipHoldSetting(this)::load)
+        val lockEvents = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_USER_PRESENT)
+        }
+        // Exported: SystemUI sends USER_PRESENT under an app uid, which never reaches a non-exported receiver.
+        // All three are protected broadcasts, so no app can fake them.
+        registerReceiver(lockReceiver, lockEvents, Context.RECEIVER_EXPORTED)
         Notifications.createChannel(this)
         partials = PartialStore(File(cacheDir, "partials"))
         downloads = DownloadsDestination(this)
@@ -137,6 +167,7 @@ class ConnectionService : Service() {
     override fun onDestroy() {
         scope.cancel()
         TransferNotifications.cancelProgress(this)
+        unregisterReceiver(lockReceiver)
         getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(networkCallback)
         super.onDestroy()
     }
@@ -288,6 +319,21 @@ class ConnectionService : Service() {
 
     private fun macName(): String = store.load()?.name ?: "Mac"
 
+    /** Screen off, or the lock screen showing. */
+    private fun lockedNow(): Boolean =
+        getSystemService(KeyguardManager::class.java).isKeyguardLocked ||
+            !getSystemService(PowerManager::class.java).isInteractive
+
+    /** Main thread. Clip text is never logged. */
+    private fun applyClip(text: String) {
+        if (clipboard.write(text)) {
+            // Before the clip listener runs: it is dispatched later on this same looper.
+            Clips.link.outbox.noteRemote(text)
+        } else {
+            Log.w(TAG, "could not apply clip")
+        }
+    }
+
     private fun listener(
         transfers: TransferSession,
         onPaired: (String) -> Unit = {},
@@ -317,12 +363,8 @@ class ConnectionService : Service() {
                 return
             }
             scope.launch(Dispatchers.Main) {
-                if (clipboard.write(text)) {
-                    // Before the clip listener runs: it is dispatched later on this same looper.
-                    Clips.link.outbox.noteRemote(text)
-                } else {
-                    Log.w(TAG, "could not apply clip ${message.id}")
-                }
+                val now = hold.onClip(text, lockedNow())
+                if (now != null) applyClip(now) else Log.d(TAG, "held clip ${message.id}")
             }
         }
 
