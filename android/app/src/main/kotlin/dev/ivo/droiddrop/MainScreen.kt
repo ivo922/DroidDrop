@@ -29,6 +29,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -60,6 +61,8 @@ fun MainScreen(
     onSendClipboard: () -> Unit,
     onUnpair: () -> Unit,
     onAllowBackground: () -> Unit,
+    holdClips: Boolean,
+    onHoldClipsChange: (Boolean) -> Unit,
     onViewAll: () -> Unit,
     received: List<ReceivedFile>?,
     nowMillis: Long,
@@ -87,7 +90,7 @@ fun MainScreen(
             item { StatusCard(state, paired, onPair, onSendFiles, onSendClipboard) }
 
             item { SectionHeader("This phone") }
-            val settings = if (paired) 3 else 2
+            val settings = if (paired) 4 else 3
             item {
                 SegmentRow(index = 0, count = settings, minHeight = 64.dp) {
                     RowIcon(R.drawable.ic_phone)
@@ -112,9 +115,24 @@ fun MainScreen(
                     RowIcon(R.drawable.ic_chevron_right, size = 20.dp)
                 }
             }
+            item {
+                SegmentRow(index = 2, count = settings, minHeight = 64.dp, onClick = { onHoldClipsChange(!holdClips) }) {
+                    RowIcon(R.drawable.ic_clipboard)
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.weight(1f)) {
+                        Text("Hold Mac clips while locked", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "Only the latest copy from your Mac reaches the clipboard when you unlock, " +
+                                "so it doesn't fill up with every copy.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = holdClips, onCheckedChange = onHoldClipsChange)
+                }
+            }
             if (paired) {
                 item {
-                    SegmentRow(index = 2, count = settings, onClick = onUnpair) {
+                    SegmentRow(index = 3, count = settings, onClick = onUnpair) {
                         RowIcon(R.drawable.ic_unlink, tint = MaterialTheme.colorScheme.error)
                         Text("Unpair", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.error)
                     }

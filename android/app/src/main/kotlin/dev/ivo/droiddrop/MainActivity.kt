@@ -47,6 +47,7 @@ class MainActivity : ComponentActivity() {
     private val receivedFiles: ReceivedFilesModel by viewModels()
     private val clipboard by lazy { getSystemService(ClipboardManager::class.java) }
     private val receivedViewStore by lazy { ReceivedViewStore(this) }
+    private val clipHoldSetting by lazy { ClipHoldSetting(this) }
 
     // Only a focused app may read the clipboard, so automatic sends run only while this screen is in front.
     // A clip the service just applied from the Mac also lands here; ClipOutbox skips it as FromMac.
@@ -100,6 +101,7 @@ class MainActivity : ComponentActivity() {
                 val received by receivedFiles.list.snapshot.collectAsStateWithLifecycle()
                 var showAll by rememberSaveable { mutableStateOf(false) }
                 var receivedView by remember { mutableStateOf(receivedViewStore.load()) }
+                var holdClips by remember { mutableStateOf(clipHoldSetting.load()) }
                 // Keeps the main screen's scroll position while View all is open.
                 val screens = rememberSaveableStateHolder()
                 BackHandler(enabled = showAll) { showAll = false }
@@ -126,6 +128,11 @@ class MainActivity : ComponentActivity() {
                             onSendClipboard = ::sendClipboard,
                             onUnpair = ::unpair,
                             onAllowBackground = ::requestBatteryExemption,
+                            holdClips = holdClips,
+                            onHoldClipsChange = {
+                                holdClips = it
+                                clipHoldSetting.save(it)
+                            },
                             onViewAll = { showAll = true },
                             received = received?.value,
                             nowMillis = received?.atMillis ?: 0L,
