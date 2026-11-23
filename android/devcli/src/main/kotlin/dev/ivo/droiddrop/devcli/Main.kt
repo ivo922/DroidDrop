@@ -64,7 +64,7 @@ fun main(args: Array<String>) {
 private fun usage(): Nothing {
     System.err.println(
         "usage: devcli pair '<droiddrop://pair?...>' | devcli connect [--ping] | devcli send <file>... | " +
-            "devcli receive <dir> [--count N] | devcli clip <text>",
+            "devcli receive <dir> [--count N] [--batch-end] | devcli clip <text>",
     )
     exitProcess(2)
 }
@@ -244,16 +244,28 @@ private fun send(client: DroidDropClient, home: File, paths: List<String>) {
 
 private fun receive(client: DroidDropClient, home: File, args: List<String>) {
     val directory = args.firstOrNull()?.takeUnless { it.startsWith("--") } ?: usage()
-    val count = when (args.size) {
-        1 -> 1
-        3 -> if (args[1] == "--count") args[2].toIntOrNull()?.takeIf { it > 0 } ?: usage() else usage()
-        else -> usage()
+    var count = 1
+    var awaitBatchEnd = false
+    var i = 1
+    while (i < args.size) {
+        when (args[i]) {
+            "--count" -> count = args.getOrNull(i + 1)?.toIntOrNull()?.takeIf { it > 0 } ?: usage()
+            "--batch-end" -> awaitBatchEnd = true
+            else -> usage()
+        }
+        i += if (args[i] == "--count") 2 else 1
     }
     val server = loadServer(home) ?: run { println("ERROR not paired"); exitProcess(1) }
     val receiver = FileReceiver(PartialStore(File(home, "partials")), DirectoryDestination(File(directory)))
     var link: MessageSender? = null
     var outcomes = 0
     var allReceived = true
+    var batchEndSeen = false
+
+    /** Ends the session once every expected file has an outcome and, with --batch-end, the batch_end has arrived. */
+    fun maybeDone() {
+        if (outcomes >= count && (!awaitBatchEnd || batchEndSeen)) throw Done()
+    }
 
     /** Sends the reply first, so the peer hears the verdict before the session is torn down. */
     fun finish(reply: Message, outcome: TransferOutcome) {
@@ -266,7 +278,8 @@ private fun receive(client: DroidDropClient, home: File, args: List<String>) {
             }
             is TransferOutcome.Sent -> return
         }
-        if (++outcomes >= count) throw Done()
+        outcomes++
+        maybeDone()
     }
 
     try {
@@ -282,6 +295,11 @@ private fun receive(client: DroidDropClient, home: File, args: List<String>) {
                         is Message.FileOffer -> link!!.send(receiver.offer(message))
                         is Message.FileDone -> receiver.done(message)?.let { (reply, outcome) -> finish(reply, outcome) }
                         is Message.FileCancel -> receiver.cancel(message.transferId)
+                        is Message.BatchEnd -> if (awaitBatchEnd && !batchEndSeen) {
+                            batchEndSeen = true
+                            println("BATCH_END ${message.count} ${message.sent}")
+                            maybeDone()
+                        }
                         else -> Unit
                     }
                 }

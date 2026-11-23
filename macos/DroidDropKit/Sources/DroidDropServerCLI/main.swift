@@ -77,6 +77,12 @@ transfers.onOutcome = { _, outcome in
         emit("FILE_FAILED \(direction == .incoming ? "in" : "out") \(name) \(reason)")
     }
 }
+// Batch files report through their summary, not onOutcome: BATCH_SUMMARY <in|out> <count> <done> <failed> <saved paths...>
+transfers.onBatchSummary = { _, summary in
+    let direction = summary.direction == .incoming ? "in" : "out"
+    let paths = summary.files.map(\.path).joined(separator: " ")
+    emit("BATCH_SUMMARY \(direction) \(summary.count) \(summary.done) \(summary.failures.count) \(paths)")
+}
 server.onPeerPaired = { emit("PAIRED \($0.name) \(Base64URL.encode($0.fingerprint))") }
 server.onConnectedPeersChanged = { emit("CONNECTED \($0.map(\.name).joined(separator: ","))") }
 server.onMessage = { peer, message in
@@ -109,6 +115,8 @@ server.start { result in
 Thread.detachNewThread {
     while let line = readLine() {
         let parts = line.split(separator: " ", maxSplits: 2).map(String.init)
+        // send-file takes several paths; paths are single-space separated and may not contain spaces.
+        let words = line.split(separator: " ").map(String.init)
         switch parts.first {
         case "pair" where parts.count == 1:
             DispatchQueue.main.async(execute: printPairURI)
@@ -133,8 +141,8 @@ Thread.detachNewThread {
                 continue
             }
             server.send(message, to: fingerprint)
-        case "send-file" where parts.count == 3:
-            guard let fingerprint = Base64URL.decode32(parts[1]) else {
+        case "send-file" where words.count >= 3:
+            guard let fingerprint = Base64URL.decode32(words[1]) else {
                 emit("ERROR bad fingerprint")
                 continue
             }
@@ -142,7 +150,7 @@ Thread.detachNewThread {
                 emit("ERROR peer not connected")
                 continue
             }
-            transfers.send([URL(fileURLWithPath: parts[2])], to: fingerprint)
+            transfers.send(words.dropFirst(2).map { URL(fileURLWithPath: $0) }, to: fingerprint)
         default:
             emit("ERROR unknown command")
         }

@@ -131,6 +131,24 @@ wait_for_log '^FILE_RECEIVED '
 cmp "$WORK/up.bin" "$WORK/downloads/up.bin"
 echo "up.bin matches"
 
+echo "== devcli send up1.bin up2.bin (phone to Mac batch) =="
+head -c 1200000 /dev/urandom >"$WORK/up1.bin"
+head -c 900000 /dev/urandom >"$WORK/up2.bin"
+batch_out="$("$DEVCLI" send "$WORK/up1.bin" "$WORK/up2.bin")"
+printf '%s\n' "$batch_out"
+expected=$'CONNECTED droiddrop-server\nSENT up1.bin\nSENT up2.bin'
+if [[ "$batch_out" != "$expected" ]]; then
+    echo "unexpected batch send output" >&2
+    exit 1
+fi
+# The codec sorts keys, so "sent" comes before "type".
+wait_for_log '^MESSAGE devcli .*"sent":2.*"type":"batch_end"'
+# Batch files report through the batch summary (count done failed paths...), not FILE_RECEIVED.
+wait_for_log '^BATCH_SUMMARY in 2 2 0 '
+cmp "$WORK/up1.bin" "$WORK/downloads/up1.bin"
+cmp "$WORK/up2.bin" "$WORK/downloads/up2.bin"
+echo "up1.bin and up2.bin match"
+
 echo "== devcli receive (Mac to phone) =="
 head -c 2500000 /dev/urandom >"$WORK/down.bin"
 fingerprint="$(grep -E '^PAIRED devcli ' "$WORK/server.log" | head -n 1 | awk '{print $3}')"
@@ -184,6 +202,62 @@ if ! grep -qxF "RECEIVED $WORK/down/down.bin" "$WORK/receive.out"; then
 fi
 cmp "$WORK/down.bin" "$WORK/down/down.bin"
 echo "down.bin matches"
+
+echo "== devcli receive --batch-end (Mac to phone batch) =="
+head -c 1500000 /dev/urandom >"$WORK/down1.bin"
+head -c 1100000 /dev/urandom >"$WORK/down2.bin"
+connected_before="$(grep -c '^CONNECTED devcli$' "$WORK/server.log" || true)"
+"$DEVCLI" receive "$WORK/down2" --count 2 --batch-end >"$WORK/receive2.out" &
+RECEIVE_PID=$!
+connected=0
+for _ in $(seq 1 100); do
+    connected="$(grep -c '^CONNECTED devcli$' "$WORK/server.log" || true)"
+    if (( connected > connected_before )); then
+        break
+    fi
+    if ! kill -0 "$RECEIVE_PID" 2>/dev/null; then
+        echo "devcli batch receive exited before it connected" >&2
+        cat "$WORK/receive2.out" >&2 || true
+        exit 1
+    fi
+    sleep 0.2
+done
+if (( connected <= connected_before )); then
+    echo "timed out waiting for the devcli batch receive session" >&2
+    exit 1
+fi
+echo "send-file $fingerprint $WORK/down1.bin $WORK/down2.bin" >&3
+
+for _ in $(seq 1 300); do
+    kill -0 "$RECEIVE_PID" 2>/dev/null || break
+    sleep 0.1
+done
+if kill -0 "$RECEIVE_PID" 2>/dev/null; then
+    echo "timed out waiting for devcli batch receive to finish" >&2
+    cat "$WORK/receive2.out" >&2 || true
+    exit 1
+fi
+receive_status=0
+wait "$RECEIVE_PID" || receive_status=$?
+RECEIVE_PID=""
+cat "$WORK/receive2.out"
+if (( receive_status != 0 )); then
+    echo "devcli batch receive exited with $receive_status" >&2
+    exit 1
+fi
+for name in down1.bin down2.bin; do
+    if ! grep -qxF "RECEIVED $WORK/down2/$name" "$WORK/receive2.out"; then
+        echo "devcli batch receive did not report $name" >&2
+        exit 1
+    fi
+    cmp "$WORK/$name" "$WORK/down2/$name"
+done
+if ! grep -qxF "BATCH_END 2 2" "$WORK/receive2.out"; then
+    echo "devcli batch receive did not report BATCH_END 2 2" >&2
+    exit 1
+fi
+echo "down1.bin and down2.bin match"
+wait_for_log '^BATCH_SUMMARY out 2 2 0'
 
 echo "== devcli clip (phone to Mac) =="
 clip_out="$("$DEVCLI" clip 'héllo from devcli')"
