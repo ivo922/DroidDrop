@@ -16,23 +16,26 @@ import Testing
         let events: EventRecorder
         let outcomes: Recorded<(Data, TransferOutcome)>
         let snapshots: Recorded<FileTransfers.Snapshot>
+        let summaries: Recorded<(Data, BatchSummary)>
     }
 
     /// A started server with FileTransfers wired in, and a paired phone.
     func start() async throws -> Harness {
         let outcomes = Recorded<(Data, TransferOutcome)>()
         let snapshots = Recorded<FileTransfers.Snapshot>()
+        let summaries = Recorded<(Data, BatchSummary)>()
         var transfers: FileTransfers!
         let (server, port) = try await base.makeServer { [directory, destination] server in
             transfers = FileTransfers(server: server, partials: PartialStore(directory: directory.appending(path: "partials")),
                                       destination: destination)
             transfers.onOutcome = { outcomes.append(($0, $1)) }
             transfers.onSnapshot = { snapshots.append($0) }
+            transfers.onBatchSummary = { summaries.append(($0, $1)) }
             server.onMessage = { [transfers] in transfers!.receive($1, from: $0.fingerprint) }
         }
         let (connection, events) = try await base.pair(server, port: port)
         return Harness(server: server, port: port, transfers: transfers, connection: connection, events: events,
-                       outcomes: outcomes, snapshots: snapshots)
+                       outcomes: outcomes, snapshots: snapshots, summaries: summaries)
     }
 
     /// Reconnects and waits for the pong, skipping (and returning) messages that arrive before it.
@@ -237,5 +240,175 @@ import Testing
             direction: .incoming, name: "a", bytesDone: 0, size: 100,
             batch: BatchProgress(index: 2, count: 3, bytesDone: 200, size: 300)))
         #expect(!FileTransfers.progressOnly(from: snapshot(10, batchDone: 110), to: next))
+    }
+
+    // MARK: - Batches
+
+    private func batchInfo(_ id: String, _ index: Int, count: Int = 2) -> BatchInfo {
+        BatchInfo(id: id, index: index, count: count, size: 10, before: index * 5)
+    }
+
+    /// Sends one 5-byte batch file over `connection` and waits for its `file_result`.
+    private func sendBatchFile(_ connection: FramedConnection, _ events: EventRecorder, text: String, batch: BatchInfo?,
+                               transferId: String = "0f8e2a4c-1b3d-4e5f-8a9b-0c1d2e3f4a5b") async throws {
+        let data = Data(text.utf8)
+        connection.send(.fileOffer(transferId: transferId, name: "\(text).txt", size: data.count, sha256: hex(data),
+                                   mime: "text/plain", batch: batch))
+        #expect(try await events.nextMessage() == .fileAccept(transferId: transferId, offset: 0))
+        connection.send(.chunk(transferId: transferId, offset: 0, data: data))
+        connection.send(.fileDone(transferId: transferId))
+        #expect(try await events.nextMessage() == .fileResult(transferId: transferId, ok: true, reason: nil))
+    }
+
+    @Test func batchOutcomesNotForwardedPerFile() async throws {
+        let h = try await start()
+        defer { h.server.stop() }
+        let id = "1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d"
+        try await sendBatchFile(h.connection, h.events, text: "one11", batch: batchInfo(id, 0))
+        h.transfers.queue.sync {}
+        #expect(h.outcomes.values.isEmpty)
+        try await sendBatchFile(h.connection, h.events, text: "plain", batch: nil, transferId: "2a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d")
+        h.transfers.queue.sync {}
+        #expect(h.outcomes.values.map(\.1) == [.received(name: "plain.txt", url: destination.appending(path: "plain.txt"))])
+    }
+
+    @Test func batchEndProducesSummaryForPeer() async throws {
+        let h = try await start()
+        defer { h.server.stop() }
+        let id = "1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d"
+        try await sendBatchFile(h.connection, h.events, text: "one11", batch: batchInfo(id, 0),
+                                transferId: "3a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d")
+        try await sendBatchFile(h.connection, h.events, text: "two22", batch: batchInfo(id, 1),
+                                transferId: "4a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d")
+        h.connection.send(.batchEnd(batch: id, count: 2, sent: 2, cancelled: false))
+        try await eventually { !h.summaries.values.isEmpty }
+        #expect(h.summaries.values.count == 1)
+        #expect(h.summaries.values.first?.0 == base.phone.fingerprint)
+        #expect(h.summaries.values.first?.1 == BatchSummary(
+            direction: .incoming, batch: id, count: 2, done: 2,
+            files: [destination.appending(path: "one11.txt"), destination.appending(path: "two22.txt")]))
+    }
+
+    @Test func summaryEndsAfterReconnectMidBatch() async throws {
+        let h = try await start()
+        defer { h.server.stop() }
+        let id = "1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d"
+        try await sendBatchFile(h.connection, h.events, text: "one11", batch: batchInfo(id, 0),
+                                transferId: "3a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d")
+        h.connection.cancel()
+        let (connection, events, _) = try await reconnect(h)
+        try await sendBatchFile(connection, events, text: "two22", batch: batchInfo(id, 1),
+                                transferId: "4a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d")
+        connection.send(.batchEnd(batch: id, count: 2, sent: 2, cancelled: false))
+        try await eventually { !h.summaries.values.isEmpty }
+        #expect(h.summaries.values.count == 1)
+        #expect(h.summaries.values.first?.1.done == 2)
+        #expect(h.summaries.values.first?.1.files.count == 2)
+    }
+
+    @Test func batchEndInNewSessionEndsBatchOfOldSession() async throws {
+        let h = try await start()
+        defer { h.server.stop() }
+        let id = "1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d"
+        try await sendBatchFile(h.connection, h.events, text: "one11", batch: batchInfo(id, 0),
+                                transferId: "3a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d")
+        try await sendBatchFile(h.connection, h.events, text: "two22", batch: batchInfo(id, 1),
+                                transferId: "4a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d")
+        h.connection.cancel()
+        let (connection, _, _) = try await reconnect(h)
+        connection.send(.batchEnd(batch: id, count: 2, sent: 2, cancelled: false))
+        try await eventually { !h.summaries.values.isEmpty }
+        #expect(h.summaries.values.count == 1)
+        #expect(h.summaries.values.first?.1.done == 2)
+        #expect(h.summaries.values.first?.1.files
+                == [destination.appending(path: "one11.txt"), destination.appending(path: "two22.txt")])
+    }
+
+    @Test func reofferOfSavedFileCountsOnceInSummary() async throws {
+        let h = try await start()
+        defer { h.server.stop() }
+        let id = "1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d"
+        try await sendBatchFile(h.connection, h.events, text: "one11", batch: batchInfo(id, 0),
+                                transferId: "3a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d")
+        let again = "5a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d"
+        let data = Data("one11".utf8)
+        h.connection.send(.fileOffer(transferId: again, name: "one11.txt", size: data.count, sha256: hex(data),
+                                     mime: "text/plain", batch: batchInfo(id, 0)))
+        #expect(try await h.events.nextMessage() == .fileAccept(transferId: again, offset: data.count))
+        h.connection.send(.fileDone(transferId: again))
+        #expect(try await h.events.nextMessage() == .fileResult(transferId: again, ok: true, reason: nil))
+        h.connection.send(.batchEnd(batch: id, count: 2, sent: 1, cancelled: false))
+        try await eventually { !h.summaries.values.isEmpty }
+        #expect(h.summaries.values.first?.1.files == [destination.appending(path: "one11.txt")])
+        // The completed path's outcome is tagged with the re-offer's batch, so it is not forwarded per file.
+        #expect(h.outcomes.values.isEmpty)
+    }
+
+    @Test func incomingFallbackSummaryForwarded() async throws {
+        let h = try await start()
+        defer { h.server.stop() }
+        let id = "1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d"
+        try await sendBatchFile(h.connection, h.events, text: "one11", batch: batchInfo(id, 0),
+                                transferId: "3a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d")
+        try await sendBatchFile(h.connection, h.events, text: "plain", batch: nil,
+                                transferId: "4a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d")
+        try await eventually { !h.outcomes.values.isEmpty }
+        // The summary is raised by the offer, before the plain file's outcome.
+        #expect(h.summaries.values.count == 1)
+        #expect(h.summaries.values.first?.0 == base.phone.fingerprint)
+        #expect(h.summaries.values.first?.1 == BatchSummary(
+            direction: .incoming, batch: id, count: 2, done: 1, silent: true,
+            files: [destination.appending(path: "one11.txt")]))
+        #expect(h.outcomes.values.map(\.1) == [.received(name: "plain.txt", url: destination.appending(path: "plain.txt"))])
+    }
+
+    @Test func sentBatchSummaryForwardedForPeer() async throws {
+        let h = try await start()
+        defer { h.server.stop() }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var urls: [URL] = []
+        for name in ["s1.txt", "s2.txt"] {
+            let url = directory.appending(path: name)
+            try Data(name.utf8).write(to: url)
+            urls.append(url)
+        }
+        h.transfers.send(urls, to: base.phone.fingerprint)
+        for _ in urls {
+            guard case let .fileOffer(id, _, _, _, _, batch) = try await h.events.nextMessage() else {
+                throw UnexpectedEvent(description: "expected file_offer")
+            }
+            #expect(batch?.count == 2)
+            h.connection.send(.fileAccept(transferId: id, offset: 0))
+            #expect(try await h.events.nextMessage() == .fileDone(transferId: id))
+            h.connection.send(.fileResult(transferId: id, ok: true, reason: nil))
+        }
+        guard case let .batchEnd(batch, count, sent, cancelled) = try await h.events.nextMessage() else {
+            throw UnexpectedEvent(description: "expected batch_end")
+        }
+        #expect((count, sent, cancelled) == (2, 2, false))
+        try await eventually { !h.summaries.values.isEmpty }
+        #expect(h.summaries.values.count == 1)
+        #expect(h.summaries.values.first?.0 == base.phone.fingerprint)
+        let summary = try #require(h.summaries.values.first?.1)
+        #expect(summary.direction == .outgoing)
+        #expect(summary.batch == batch)
+        #expect(summary.count == 2)
+        #expect(summary.done == 2)
+        h.transfers.queue.sync {}
+        #expect(h.outcomes.values.isEmpty)
+    }
+
+    @Test func silentCancelDropsOpenIncomingBatch() async throws {
+        let h = try await start()
+        defer { h.server.stop() }
+        let id = "1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d"
+        try await sendBatchFile(h.connection, h.events, text: "one11", batch: batchInfo(id, 0))
+        h.transfers.cancelSending(to: base.phone.fingerprint, silent: true)
+        h.transfers.queue.sync {}
+        h.connection.send(.batchEnd(batch: id, count: 2, sent: 1, cancelled: false))
+        h.connection.send(.ping(id: 9))
+        #expect(try await h.events.nextMessage() == .pong(id: 9))
+        h.transfers.queue.sync {}
+        #expect(h.summaries.values.isEmpty)
     }
 }

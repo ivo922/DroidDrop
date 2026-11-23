@@ -57,7 +57,7 @@ import Testing
         #expect(receiver.chunk(transferId: id1, offset: 0, data: Data(data[..<1_048_576])) == nil)
         #expect(receiver.status == TransferStatus(direction: .incoming, name: "photo.jpg", bytesDone: 1_048_576, size: data.count))
         #expect(receiver.chunk(transferId: id1, offset: 1_048_576, data: Data(data[1_048_576...])) == nil)
-        let (reply, outcome) = try #require(receiver.done(transferId: id1))
+        let (reply, outcome, _) = try #require(receiver.done(transferId: id1))
         let saved = root.appending(path: "Downloads/DroidDrop/photo.jpg")
         #expect(reply == .fileResult(transferId: id1, ok: true, reason: nil))
         #expect(outcome == .received(name: "photo.jpg", url: saved))
@@ -69,7 +69,7 @@ import Testing
     @Test func emptyFile() throws {
         let (receiver, root) = makeReceiver()
         #expect(receiver.offer(transferId: id1, name: "empty.txt", size: 0, sha256: hex(Data())) == .fileAccept(transferId: id1, offset: 0))
-        let (reply, _) = try #require(receiver.done(transferId: id1))
+        let (reply, _, _) = try #require(receiver.done(transferId: id1))
         #expect(reply == .fileResult(transferId: id1, ok: true, reason: nil))
         let saved = root.appending(path: "Downloads/DroidDrop/empty.txt")
         #expect(try Data(contentsOf: saved).isEmpty)
@@ -86,7 +86,7 @@ import Testing
         #expect(second.offer(transferId: id2, name: "photo.jpg", size: data.count, sha256: hex(data)) == .fileAccept(transferId: id2, offset: mebibyte))
         #expect(second.status?.bytesDone == mebibyte)
         #expect(second.chunk(transferId: id2, offset: UInt64(mebibyte), data: Data(data[mebibyte...])) == nil)
-        let (reply, outcome) = try #require(second.done(transferId: id2))
+        let (reply, outcome, _) = try #require(second.done(transferId: id2))
         #expect(reply == .fileResult(transferId: id2, ok: true, reason: nil))
         let saved = root.appending(path: "Downloads/DroidDrop/photo.jpg")
         #expect(outcome == .received(name: "photo.jpg", url: saved))
@@ -143,7 +143,7 @@ import Testing
         let data = sample(10)
         _ = receiver.offer(transferId: id1, name: "a.bin", size: 10, sha256: hex(data))
         #expect(receiver.chunk(transferId: id1, offset: 0, data: Data(data[..<5])) == nil)
-        let (reply, outcome) = try #require(receiver.done(transferId: id1))
+        let (reply, outcome, _) = try #require(receiver.done(transferId: id1))
         #expect(reply == .fileResult(transferId: id1, ok: false, reason: "size_mismatch"))
         #expect(outcome == .failed(.incoming, name: "a.bin", reason: "size_mismatch"))
         #expect(partialCount(root) == 0)
@@ -156,7 +156,7 @@ import Testing
         let data = sample(1000)
         _ = receiver.offer(transferId: id1, name: "a.bin", size: data.count, sha256: hex(Data("other".utf8)))
         #expect(receiver.chunk(transferId: id1, offset: 0, data: data) == nil)
-        let (reply, outcome) = try #require(receiver.done(transferId: id1))
+        let (reply, outcome, _) = try #require(receiver.done(transferId: id1))
         #expect(reply == .fileResult(transferId: id1, ok: false, reason: "hash_mismatch"))
         #expect(outcome == .failed(.incoming, name: "a.bin", reason: "hash_mismatch"))
         #expect(partialCount(root) == 0)
@@ -212,7 +212,7 @@ import Testing
         #expect(second.offer(transferId: id2, name: "photo.jpg", size: data.count, sha256: hex(data)) == .fileAccept(transferId: id2, offset: data.count))
         #expect(second.status == nil)
         #expect(second.chunk(transferId: id2, offset: 0, data: data) == nil)
-        let (reply, outcome) = try #require(second.done(transferId: id2))
+        let (reply, outcome, _) = try #require(second.done(transferId: id2))
         #expect(reply == .fileResult(transferId: id2, ok: true, reason: nil))
         #expect(outcome == firstOutcome)
         #expect(destinationCount(root) == 1)
@@ -228,7 +228,7 @@ import Testing
         let (second, _) = makeReceiver(in: root)
         #expect(second.offer(transferId: id2, name: "photo.jpg", size: data.count, sha256: hex(data)) == .fileAccept(transferId: id2, offset: 0))
         #expect(second.chunk(transferId: id2, offset: 0, data: data) == nil)
-        let (reply, outcome) = try #require(second.done(transferId: id2))
+        let (reply, outcome, _) = try #require(second.done(transferId: id2))
         #expect(reply == .fileResult(transferId: id2, ok: true, reason: nil))
         let saved = root.appending(path: "Downloads/DroidDrop/photo (1).jpg")
         #expect(outcome == .received(name: "photo (1).jpg", url: saved))
@@ -245,10 +245,70 @@ import Testing
         let (second, _) = makeReceiver(in: root)
         #expect(second.offer(transferId: id2, name: "photo.jpg", size: data.count, sha256: hex(data)) == .fileAccept(transferId: id2, offset: 0))
         #expect(second.chunk(transferId: id2, offset: 0, data: data) == nil)
-        let (reply, outcome) = try #require(second.done(transferId: id2))
+        let (reply, outcome, _) = try #require(second.done(transferId: id2))
         #expect(reply == .fileResult(transferId: id2, ok: true, reason: nil))
         #expect(outcome == .received(name: "photo.jpg", url: saved))
         #expect(try Data(contentsOf: saved) == data)
         #expect(destinationCount(root) == 1)
+    }
+
+    // MARK: - Batches
+
+    @Test func statusCarriesBatchProgress() throws {
+        let (receiver, _) = makeReceiver()
+        let data = sample(3_000)
+        let batch = BatchInfo(id: id2, index: 2, count: 5, size: 10_000, before: 4_000)
+        _ = receiver.offer(transferId: id1, name: "a.bin", size: data.count, sha256: hex(data), batch: batch)
+        #expect(receiver.status?.batch == BatchProgress(index: 2, count: 5, bytesDone: 4_000, size: 10_000))
+        #expect(receiver.chunk(transferId: id1, offset: 0, data: Data(data[..<1_000])) == nil)
+        #expect(receiver.status?.batch == BatchProgress(index: 2, count: 5, bytesDone: 5_000, size: 10_000))
+    }
+
+    @Test func statusBatchProgressClamped() throws {
+        let (receiver, _) = makeReceiver()
+        let data = sample(3_000)
+        let batch = BatchInfo(id: id2, index: 1, count: 2, size: 4_000, before: 3_500)
+        _ = receiver.offer(transferId: id1, name: "a.bin", size: data.count, sha256: hex(data), batch: batch)
+        #expect(receiver.chunk(transferId: id1, offset: 0, data: Data(data[..<1_000])) == nil)
+        #expect(receiver.status?.batch?.bytesDone == 4_000)
+    }
+
+    @Test func outcomeCarriesBatch() throws {
+        let (receiver, _) = makeReceiver()
+        let data = sample(3_000)
+        let batch = BatchInfo(id: id2, index: 0, count: 2, size: 6_000, before: 0)
+        _ = receiver.offer(transferId: id1, name: "a.bin", size: data.count, sha256: hex(data), batch: batch)
+        #expect(receiver.chunk(transferId: id1, offset: 0, data: data) == nil)
+        let first = try #require(receiver.done(transferId: id1))
+        #expect(first.batch == batch)
+
+        // The "already completed" path carries the re-offer's batch, not the first offer's.
+        let reoffer = BatchInfo(id: id2, index: 0, count: 3, size: 9_000, before: 100)
+        _ = receiver.offer(transferId: id2, name: "a.bin", size: data.count, sha256: hex(data), batch: reoffer)
+        let again = try #require(receiver.done(transferId: id2))
+        #expect(again.batch == reoffer)
+        #expect(again.outcome == first.outcome)
+        guard case .received = again.outcome else { Issue.record("not received: \(again.outcome)"); return }
+        #expect(again.reply == .fileResult(transferId: id2, ok: true, reason: nil))
+
+        // The abort path carries it too.
+        let stray = BatchInfo(id: id2, index: 1, count: 2, size: 6_000, before: 3_000)
+        _ = receiver.offer(transferId: id1, name: "s.bin", size: 10, sha256: hex(Data(count: 10)), batch: stray)
+        let aborted = try #require(receiver.chunk(transferId: id1, offset: 5, data: Data(count: 5)))
+        #expect(aborted.batch == stray)
+        #expect(aborted.reply == .fileCancel(transferId: id1))
+        #expect(aborted.outcome == .failed(.incoming, name: "s.bin", reason: "out_of_order"))
+
+        // A failure carries it, and an unbatched file does not.
+        let bad = BatchInfo(id: id2, index: 1, count: 2, size: 6_000, before: 3_000)
+        _ = receiver.offer(transferId: id1, name: "b.bin", size: 4, sha256: hex(Data("good".utf8)), batch: bad)
+        #expect(receiver.chunk(transferId: id1, offset: 0, data: Data("bad!".utf8)) == nil)
+        let failed = try #require(receiver.done(transferId: id1))
+        #expect(failed.batch == bad)
+        #expect(failed.outcome == .failed(.incoming, name: "b.bin", reason: "hash_mismatch"))
+        let plain = Data("plain".utf8)
+        _ = receiver.offer(transferId: id1, name: "c.txt", size: plain.count, sha256: hex(plain))
+        #expect(receiver.chunk(transferId: id1, offset: 0, data: plain) == nil)
+        #expect(try #require(receiver.done(transferId: id1)).batch == nil)
     }
 }

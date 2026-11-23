@@ -83,14 +83,25 @@ extension TransferStatus {
     var percent: Int { size == 0 ? 0 : bytesDone * 100 / size }
 }
 
+extension TransferStatus {
+    /// `Sending 3 of 20 · IMG_2041.jpg — 45%` for a batch file (the percent covers the batch), else `Sending a.pdf — 10%`.
+    fileprivate func menuLine(verb: String) -> String {
+        let queuedText = queued > 0 ? " (+\(queued) queued)" : ""
+        if let batch {
+            let batchPercent = batch.size == 0 ? 0 : batch.bytesDone * 100 / batch.size
+            return "\(verb) \(batch.index + 1) of \(batch.count) · \(name) — \(batchPercent)%\(queuedText)"
+        }
+        return "\(verb) \(name) — \(percent)%\(queuedText)"
+    }
+}
+
 extension FileTransfers.Snapshot {
     /// Menu lines, incoming first. Empty when idle.
     public var menuLines: [String] {
         var lines: [String] = []
-        if let incoming { lines.append("Receiving \(incoming.name) — \(incoming.percent)%") }
+        if let incoming { lines.append(incoming.menuLine(verb: "Receiving")) }
         if let outgoing {
-            let queued = outgoing.queued > 0 ? " (+\(outgoing.queued) queued)" : ""
-            lines.append("Sending \(outgoing.name) — \(outgoing.percent)%\(queued)")
+            lines.append(outgoing.menuLine(verb: "Sending"))
         } else if waitingToSend > 0 {
             lines.append("\(waitingToSend) \(waitingToSend == 1 ? "file" : "files") waiting for the phone")
         }
@@ -109,5 +120,47 @@ extension TransferOutcome {
         case let .failed(direction, name, reason):
             return ("Could not \(direction == .incoming ? "receive" : "send") \(name)", reason)
         }
+    }
+}
+
+extension BatchSummary {
+    /// Title and body of the one notification that ends a batch; `peerName` names the phone.
+    public func notificationText(peerName: String) -> (title: String, body: String) {
+        let files = count == 1 ? "file" : "files"
+        if direction == .outgoing {
+            let title = done == count ? "Sent \(count) \(files)"
+                : done == 0 ? "Could not send \(count) \(files)" : "Sent \(done) of \(count) \(files)"
+            let body: String
+            if cancelled {
+                body = "Cancelled"
+            } else if failures.isEmpty && done >= count {
+                body = "To \(peerName)"
+            } else {
+                body = failureList
+            }
+            return (title, body)
+        }
+        let title = done == count ? "Received \(count) \(files)"
+            : done == 0 ? "Could not receive \(count) \(files)" : "Received \(done) of \(count) \(files)"
+        let body: String
+        if cancelled && done < count {
+            body = "Cancelled on \(peerName)"
+        } else if done >= count {
+            body = "From \(peerName) · Downloads › DroidDrop"
+        } else {
+            body = "\(count - done) not received"
+        }
+        return (title, body)
+    }
+
+    private static let maxListed = 5
+
+    /// At most 5 failures, one `<name> (<reason>)` per line, then `and N more` (R7).
+    private var failureList: String {
+        let total = failures.isEmpty ? count - done : failures.count
+        var lines = ["\(total) failed:"]
+        lines += failures.prefix(Self.maxListed).map { "\($0.name) (\($0.reason))" }
+        if failures.count > Self.maxListed { lines.append("and \(failures.count - Self.maxListed) more") }
+        return lines.joined(separator: "\n")
     }
 }

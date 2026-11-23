@@ -10,13 +10,14 @@ public final class FileReceiver {
         let partial: URL
         let handle: FileHandle
         var received: Int
+        let batch: BatchInfo?
     }
 
     private let partials: PartialStore
     private let destination: URL
     private var active: Active?
     /// A re-offer of a file already saved, whose `file_result` was lost: accepted at its end, answered from the marker.
-    private var completed: (transferId: String, saved: URL)?
+    private var completed: (transferId: String, saved: URL, batch: BatchInfo?)?
 
     public init(partials: PartialStore, destination: URL) {
         self.partials = partials
@@ -25,15 +26,22 @@ public final class FileReceiver {
 
     /// The transfer in progress (sanitized name), or nil.
     public var status: TransferStatus? {
-        active.map { TransferStatus(direction: .incoming, name: $0.name, bytesDone: $0.received, size: $0.size) }
+        active.map { current in
+            let batch = current.batch.map {
+                BatchProgress(index: $0.index, count: $0.count, bytesDone: min(max($0.before + current.received, 0), $0.size),
+                              size: $0.size)
+            }
+            return TransferStatus(direction: .incoming, name: current.name, bytesDone: current.received, size: current.size,
+                                  batch: batch)
+        }
     }
 
     /// `file_accept` at the resume offset, or `file_reject{reason: "cannot_write"}`. Supersedes an active transfer (R2).
     /// A file saved less than `PartialStore.completionMaxAge` ago that still exists is accepted at its size.
-    public func offer(transferId: String, name: String, size: Int, sha256: String) -> Message {
+    public func offer(transferId: String, name: String, size: Int, sha256: String, batch: BatchInfo? = nil) -> Message {
         close()
         if let saved = partials.completedLocation(sha256: sha256, size: size) {
-            completed = (transferId, saved)
+            completed = (transferId, saved, batch)
             return .fileAccept(transferId: transferId, offset: size)
         }
         let fileManager = FileManager.default
@@ -47,7 +55,7 @@ public final class FileReceiver {
             let handle = try FileHandle(forWritingTo: partial)
             let offset = Int(try handle.seekToEnd())
             active = Active(transferId: transferId, name: FileName.sanitize(name), size: size, sha256: sha256,
-                            partial: partial, handle: handle, received: offset)
+                            partial: partial, handle: handle, received: offset, batch: batch)
             return .fileAccept(transferId: transferId, offset: offset)
         } catch {
             return .fileReject(transferId: transferId, reason: "cannot_write")
@@ -55,7 +63,7 @@ public final class FileReceiver {
     }
 
     /// Nil when written or ignored; else `file_cancel` plus the failure, with the partial discarded (R3).
-    public func chunk(transferId: String, offset: UInt64, data: Data) -> (reply: Message, outcome: TransferOutcome)? {
+    public func chunk(transferId: String, offset: UInt64, data: Data) -> (reply: Message, outcome: TransferOutcome, batch: BatchInfo?)? {
         guard var current = active, current.transferId == transferId else { return nil }
         guard offset == UInt64(current.received) else { return abort(reason: "out_of_order") }
         guard data.count <= current.size - current.received else { return abort(reason: "too_long") }
@@ -69,21 +77,21 @@ public final class FileReceiver {
         return nil
     }
 
-    /// `file_result` plus the outcome; nil when `transferId` is not active.
-    public func done(transferId: String) -> (reply: Message, outcome: TransferOutcome)? {
+    /// `file_result` plus the outcome and the offer's batch; nil when `transferId` is not active.
+    public func done(transferId: String) -> (reply: Message, outcome: TransferOutcome, batch: BatchInfo?)? {
         if let completed, completed.transferId == transferId {
             self.completed = nil
             return (.fileResult(transferId: transferId, ok: true, reason: nil),
-                    .received(name: completed.saved.lastPathComponent, url: completed.saved))
+                    .received(name: completed.saved.lastPathComponent, url: completed.saved), completed.batch)
         }
         guard let current = active, current.transferId == transferId else { return nil }
         active = nil
         try? current.handle.close()
 
-        func failure(_ reason: String) -> (reply: Message, outcome: TransferOutcome) {
+        func failure(_ reason: String) -> (reply: Message, outcome: TransferOutcome, batch: BatchInfo?) {
             try? FileManager.default.removeItem(at: current.partial)
             return (.fileResult(transferId: transferId, ok: false, reason: reason),
-                    .failed(.incoming, name: current.name, reason: reason))
+                    .failed(.incoming, name: current.name, reason: reason), current.batch)
         }
 
         guard current.received == current.size else { return failure("size_mismatch") }
@@ -99,7 +107,7 @@ public final class FileReceiver {
             try fileManager.moveItem(at: current.partial, to: saved)
             Self.quarantine(saved)
             partials.markCompleted(sha256: current.sha256, size: current.size, location: saved)
-            return (.fileResult(transferId: transferId, ok: true, reason: nil), .received(name: name, url: saved))
+            return (.fileResult(transferId: transferId, ok: true, reason: nil), .received(name: name, url: saved), current.batch)
         } catch {
             return failure("save_failed")
         }
@@ -119,11 +127,11 @@ public final class FileReceiver {
     }
 
     /// Ends the active transfer with `file_cancel`, discarding the partial (R3).
-    private func abort(reason: String) -> (reply: Message, outcome: TransferOutcome)? {
+    private func abort(reason: String) -> (reply: Message, outcome: TransferOutcome, batch: BatchInfo?)? {
         guard let current = active else { return nil }
         close()
         try? FileManager.default.removeItem(at: current.partial)
-        return (.fileCancel(transferId: current.transferId), .failed(.incoming, name: current.name, reason: reason))
+        return (.fileCancel(transferId: current.transferId), .failed(.incoming, name: current.name, reason: reason), current.batch)
     }
 
     /// Marks a received file as downloaded, so Gatekeeper checks it on first open. The app is not sandboxed, so macOS

@@ -25,13 +25,18 @@ public final class FileTransfers: @unchecked Sendable {
     /// On `queue`; at most every `statusInterval`, except that starts and ends are always reported.
     public var onSnapshot: ((Snapshot) -> Void)?
     /// On `queue`; peer fingerprint and outcome.
+    /// Unbatched files only: a batch file's outcome feeds its batch summary instead (R3).
     public var onOutcome: ((Data, TransferOutcome) -> Void)?
+    /// On `queue`; peer fingerprint and the one summary that ends a batch, in either direction.
+    public var onBatchSummary: ((Data, BatchSummary) -> Void)?
 
     private weak var server: DroidDropServer?
     private let partials: PartialStore
     private let destination: URL
     private var receivers: [Data: FileReceiver] = [:]
     private var senders: [Data: FileSender] = [:]
+    /// Each peer's open incoming batch; kept across session replacement.
+    private var incomingBatches: [Data: IncomingBatches] = [:]
     /// The link of each peer's established session; none while the peer is disconnected.
     private var links: [Data: Link] = [:]
     private var outgoing: [Data: TransferStatus] = [:]
@@ -73,10 +78,12 @@ public final class FileTransfers: @unchecked Sendable {
     }
 
     /// Cancels the active outgoing file and drops the rest of the peer's queue (R10). Any thread.
-    public func cancelSending(to fingerprint: Data) {
+    /// `silent` (unpair) posts no summaries and also drops the peer's open incoming batch.
+    public func cancelSending(to fingerprint: Data, silent: Bool = false) {
         queue.async { [weak self] in
             guard let self else { return }
-            self.senders[fingerprint]?.cancelAll()
+            self.senders[fingerprint]?.cancelAll(silent: silent)
+            if silent { self.incomingBatches[fingerprint]?.clear() }
             self.publish()
         }
     }
@@ -123,10 +130,17 @@ public final class FileTransfers: @unchecked Sendable {
 
     private func route(_ message: Message, from fingerprint: Data) {
         switch message {
-        case let .fileOffer(transferId, name, size, sha256, _, _):
+        case let .fileOffer(transferId, name, size, sha256, _, batch):
             guard let receiver = receivers[fingerprint] else { return }
-            let reply = receiver.offer(transferId: transferId, name: name, size: size, sha256: sha256)
+            if let summary = incomingBatches[fingerprint, default: IncomingBatches()].offer(batch: batch) {
+                onBatchSummary?(fingerprint, summary)
+            }
+            let reply = receiver.offer(transferId: transferId, name: name, size: size, sha256: sha256, batch: batch)
             links[fingerprint]?.send(reply)
+        case let .batchEnd(batch, count, sent, cancelled):
+            if let summary = incomingBatches[fingerprint]?.end(batch: batch, count: count, sent: sent, cancelled: cancelled) {
+                onBatchSummary?(fingerprint, summary)
+            }
         case let .fileDone(transferId):
             guard let result = receivers[fingerprint]?.done(transferId: transferId) else { return }
             finish(result, from: fingerprint)
@@ -150,8 +164,12 @@ public final class FileTransfers: @unchecked Sendable {
     }
 
     /// Reports an incoming transfer's outcome, then sends the receiver's reply.
-    private func finish(_ result: (reply: Message, outcome: TransferOutcome), from fingerprint: Data) {
-        onOutcome?(fingerprint, result.outcome)
+    private func finish(_ result: (reply: Message, outcome: TransferOutcome, batch: BatchInfo?), from fingerprint: Data) {
+        if let batch = result.batch {
+            incomingBatches[fingerprint, default: IncomingBatches()].outcome(result.outcome, batch: batch)
+        } else {
+            onOutcome?(fingerprint, result.outcome)
+        }
         links[fingerprint]?.send(result.reply)
     }
 
@@ -163,6 +181,7 @@ public final class FileTransfers: @unchecked Sendable {
             self?.publish()
         }
         sender.onOutcome = { [weak self] outcome in self?.onOutcome?(fingerprint, outcome) }
+        sender.onBatchSummary = { [weak self] summary in self?.onBatchSummary?(fingerprint, summary) }
         senders[fingerprint] = sender
         if let link = links[fingerprint] { sender.connected(link) }
         return sender
