@@ -2,9 +2,8 @@
 
 Android ↔ macOS file transfer and clipboard sync over the local network.
 
-- Design: [`docs/specs/2026-11-05-droiddrop-design.md`](docs/specs/2026-11-05-droiddrop-design.md)
 - Wire protocol: [`protocol/SPEC.md`](protocol/SPEC.md), conformance fixtures in [`protocol/fixtures/`](protocol/fixtures/)
-- Plans: [`docs/superpowers/plans/`](docs/superpowers/plans/)
+- Design spec and milestone plans live in `docs/`, which is local only (git-ignored) and not part of the repo.
 
 ## Verify
 
@@ -20,3 +19,4 @@ Android ↔ macOS file transfer and clipboard sync over the local network.
 | `android/core/` | Pure Kotlin/JVM protocol logic (`./gradlew :core:test`) |
 | `android/app/` | Android app |
 | `android/devcli/` | JVM CLI client for exercising the Mac without a phone |
+| `docs/` | Local only, git-ignored: design spec and milestone plans |

@@ -1,8 +1,11 @@
 # DroidDrop — agent notes
 
-Android ↔ macOS file transfer and clipboard sync over the LAN. Read `README.md` for the layout,
-`docs/specs/2026-11-05-droiddrop-design.md` for behavior, and `protocol/SPEC.md` for the wire format (normative).
-Each milestone's plan in `docs/superpowers/plans/` lists "Decisions not in the spec" (R1, R2, …): treat those as settled.
+Android ↔ macOS file transfer and clipboard sync over the LAN. Read `README.md` for the layout and
+`protocol/SPEC.md` for the wire format (normative).
+
+`docs/` is local only (git-ignored, not in the repo), so it may be missing in a fresh clone. When it is there, read
+`docs/specs/2026-11-05-droiddrop-design.md` for behavior. Each milestone's plan in `docs/superpowers/plans/` lists
+"Decisions not in the spec" (R1, R2, …): treat those as settled. Never `git add` anything under `docs/`.
 
 ## Verify
 
