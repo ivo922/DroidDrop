@@ -189,7 +189,7 @@ public final class FileSender: @unchecked Sendable {
         active?.phase = .offered(id)
         active?.size = digest.size
         let mime = UTType(filenameExtension: items[0].url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-        link.send(.fileOffer(transferId: id, name: items[0].name, size: digest.size, sha256: digest.hex, mime: mime))
+        link.send(.fileOffer(transferId: id, name: items[0].name, size: digest.size, sha256: digest.hex, mime: mime, batch: nil))
         onStatus?(status(name: items[0].name, bytesDone: 0, size: digest.size))
     }
 

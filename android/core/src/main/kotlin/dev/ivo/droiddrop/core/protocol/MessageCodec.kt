@@ -55,12 +55,18 @@ object MessageCodec {
                 size = o.integer("size"),
                 sha256 = o.string("sha256").also { if (!sha256Pattern.matches(it)) throw invalid("bad sha256") },
                 mime = o.nonEmpty("mime"),
+                batch = o.optional("batch")?.let { decodeBatch(it as? JsonObject ?: throw invalid("'batch' must be an object")) },
             )
             "file_accept" -> Message.FileAccept(o.uuid("transferId"), o.integer("offset"))
             "file_reject" -> Message.FileReject(o.uuid("transferId"), o.string("reason"))
             "file_done" -> Message.FileDone(o.uuid("transferId"))
             "file_result" -> Message.FileResult(o.uuid("transferId"), o.boolean("ok"), o.optional("reason")?.let { o.string("reason") })
             "file_cancel" -> Message.FileCancel(o.uuid("transferId"))
+            "batch_end" -> {
+                val count = o.integer("count").also { if (it < 1) throw invalid("count must be >= 1") }
+                val sent = o.integer("sent").also { if (it > count) throw invalid("sent must be <= count") }
+                Message.BatchEnd(o.uuid("batch"), count, sent, o.optional("cancelled")?.let { o.boolean("cancelled") } ?: false)
+            }
             else -> Message.Unknown(type)
         }
     }
@@ -90,6 +96,11 @@ object MessageCodec {
             is Message.FileOffer -> {
                 put("type", "file_offer"); put("transferId", message.transferId); put("name", message.name)
                 put("size", message.size); put("sha256", message.sha256); put("mime", message.mime)
+                message.batch?.let { b ->
+                    put("batch", buildJsonObject {
+                        put("id", b.id); put("index", b.index); put("count", b.count); put("size", b.size); put("before", b.before)
+                    })
+                }
             }
             is Message.FileAccept -> {
                 put("type", "file_accept"); put("transferId", message.transferId); put("offset", message.offset)
@@ -107,9 +118,21 @@ object MessageCodec {
             is Message.FileCancel -> {
                 put("type", "file_cancel"); put("transferId", message.transferId)
             }
+            is Message.BatchEnd -> {
+                put("type", "batch_end"); put("batch", message.batch); put("count", message.count); put("sent", message.sent)
+                if (message.cancelled) put("cancelled", true)
+            }
             is Message.Unknown -> throw IllegalArgumentException("unknown messages cannot be encoded: ${message.type}")
         }
     }.toString().toByteArray(StandardCharsets.UTF_8)
+
+    private fun decodeBatch(o: JsonObject): BatchInfo {
+        val info = BatchInfo(o.uuid("id"), o.integer("index"), o.integer("count"), o.integer("size"), o.integer("before"))
+        if (info.count < 1) throw invalid("batch count must be >= 1")
+        if (info.index >= info.count) throw invalid("batch index must be < count")
+        if (info.before > info.size) throw invalid("batch before must be <= size")
+        return info
+    }
 
     private fun invalid(reason: String) = ProtocolException("invalid_message", reason)
 

@@ -69,6 +69,16 @@ def messages():
     tid = "0f8e2d1c-3b4a-4c5d-8e6f-7a8b9c0d1e2f"
     proof = b64url(bytes(range(32)))
     sha = hashlib.sha256(b"hello world").hexdigest()
+    bid = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+    offer = {"type": "file_offer", "transferId": tid, "name": "photo.jpg", "size": 11, "sha256": sha, "mime": "image/jpeg"}
+    batch = {"id": bid, "index": 0, "count": 2, "size": 11, "before": 0}
+
+    def offer_raw(b):
+        return json.dumps({**offer, "batch": b}, separators=(",", ":"))
+
+    def end_raw(**kw):
+        return json.dumps({"type": "batch_end", "batch": bid, "count": 2, "sent": 2, **kw}, separators=(",", ":"))
+
     valid = [
         {"type": "hello", "v": 1, "name": "Ivo's MacBook Pro", "platform": "macos"},
         {"type": "hello", "v": 1, "name": "Pixel 9", "platform": "android"},
@@ -90,6 +100,12 @@ def messages():
         {"type": "file_result", "transferId": tid, "ok": True},
         {"type": "file_result", "transferId": tid, "ok": False, "reason": "hash_mismatch"},
         {"type": "file_cancel", "transferId": tid},
+        {"type": "file_offer", "transferId": tid, "name": "photo.jpg", "size": 11, "sha256": sha, "mime": "image/jpeg",
+         "batch": {"id": bid, "index": 0, "count": 2, "size": 11, "before": 0}},
+        {"type": "file_offer", "transferId": tid, "name": "big.bin", "size": 11, "sha256": sha, "mime": "image/jpeg",
+         "batch": {"id": bid, "index": 1, "count": 2, "size": 5_000_000_000, "before": 4_999_999_989}},
+        {"type": "batch_end", "batch": bid, "count": 2, "sent": 2},
+        {"type": "batch_end", "batch": bid, "count": 20, "sent": 5, "cancelled": True},
     ]
     return {
         "valid": [{"name": f"{i:02d}_{m['type']}", "json": m} for i, m in enumerate(valid)],
@@ -97,6 +113,9 @@ def messages():
             {"name": "unknown_members_dropped",
              "input": {"type": "ping", "id": 3, "future": {"nested": True}},
              "output": {"type": "ping", "id": 3}},
+            {"name": "batch_unknown_member_dropped",
+             "input": {**offer, "batch": {**batch, "future": {"nested": True}}},
+             "output": {**offer, "batch": batch}},
         ],
         "validRaw": [
             {"name": "escaped_surrogate_pair",
@@ -116,6 +135,11 @@ def messages():
              "json": {"type": "ping", "id": 1}},
             {"name": "pair_result_null_optionals", "raw": "{\"type\":\"pair_result\",\"ok\":false,\"proof\":null,\"reason\":null}",
              "json": {"type": "pair_result", "ok": False}},
+            {"name": "batch_end_cancelled_false", "raw": end_raw(cancelled=False),
+             "json": {"type": "batch_end", "batch": bid, "count": 2, "sent": 2}},
+            {"name": "file_offer_batch_null", "raw": offer_raw(None), "json": offer},
+            {"name": "batch_end_cancelled_null", "raw": end_raw(cancelled=None),
+             "json": {"type": "batch_end", "batch": bid, "count": 2, "sent": 2}},
         ],
         "unknown": [
             {"name": "future_type", "json": {"type": "screen_share", "x": 1}, "type": "screen_share"},
@@ -171,6 +195,19 @@ def messages():
             {"name": "ping_id_null", "raw": "{\"type\":\"ping\",\"id\":null}"},
             {"name": "clip_text_null", "raw": "{\"type\":\"clip\",\"id\":\"5b2c8f9e-1d3a-4e7b-9c6d-0a1b2c3d4e5f\",\"mime\":\"text/plain\",\"text\":null}"},
             {"name": "hello_v_float", "raw": "{\"type\":\"hello\",\"v\":1.0,\"name\":\"a\",\"platform\":\"macos\"}"},
+            {"name": "file_offer_batch_not_object", "raw": offer_raw("x")},
+            {"name": "file_offer_batch_missing_id", "raw": offer_raw({m: v for m, v in batch.items() if m != "id"})},
+            {"name": "file_offer_batch_missing_index", "raw": offer_raw({m: v for m, v in batch.items() if m != "index"})},
+            {"name": "file_offer_batch_missing_count", "raw": offer_raw({m: v for m, v in batch.items() if m != "count"})},
+            {"name": "file_offer_batch_missing_size", "raw": offer_raw({m: v for m, v in batch.items() if m != "size"})},
+            {"name": "file_offer_batch_missing_before", "raw": offer_raw({m: v for m, v in batch.items() if m != "before"})},
+            {"name": "file_offer_batch_bad_uuid", "raw": offer_raw({**batch, "id": "not-a-uuid"})},
+            {"name": "file_offer_batch_count_zero", "raw": offer_raw({**batch, "count": 0, "index": 0})},
+            {"name": "file_offer_batch_index_equals_count", "raw": offer_raw({**batch, "index": 2})},
+            {"name": "file_offer_batch_before_above_size", "raw": offer_raw({**batch, "before": 12})},
+            {"name": "batch_end_sent_above_count", "raw": end_raw(sent=3)},
+            {"name": "batch_end_count_zero", "raw": end_raw(count=0, sent=0)},
+            {"name": "batch_end_cancelled_string", "raw": end_raw(cancelled="true")},
             {"name": "file_result_ok_number", "raw": "{\"type\":\"file_result\",\"transferId\":\"" + tid + "\",\"ok\":1}"},
         ],
         "invalidHex": [

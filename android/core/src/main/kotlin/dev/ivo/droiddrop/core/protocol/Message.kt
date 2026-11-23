@@ -9,6 +9,9 @@ enum class Platform(val wire: String) {
     }
 }
 
+/** The optional `batch` member of a `file_offer` (SPEC §9.2). */
+data class BatchInfo(val id: String, val index: Long, val count: Long, val size: Long, val before: Long)
+
 sealed interface Message {
     data class Hello(val v: Long, val name: String, val platform: Platform) : Message
     data class PairRequest(val proof: String) : Message
@@ -16,11 +19,19 @@ sealed interface Message {
     data class Ping(val id: Long) : Message
     data class Pong(val id: Long) : Message
     data class Clip(val id: String, val mime: String, val text: String) : Message
-    data class FileOffer(val transferId: String, val name: String, val size: Long, val sha256: String, val mime: String) : Message
+    data class FileOffer(
+        val transferId: String,
+        val name: String,
+        val size: Long,
+        val sha256: String,
+        val mime: String,
+        val batch: BatchInfo? = null,
+    ) : Message
     data class FileAccept(val transferId: String, val offset: Long) : Message
     data class FileReject(val transferId: String, val reason: String) : Message
     data class FileDone(val transferId: String) : Message
     data class FileResult(val transferId: String, val ok: Boolean, val reason: String? = null) : Message
     data class FileCancel(val transferId: String) : Message
+    data class BatchEnd(val batch: String, val count: Long, val sent: Long, val cancelled: Boolean = false) : Message
     data class Unknown(val type: String) : Message
 }

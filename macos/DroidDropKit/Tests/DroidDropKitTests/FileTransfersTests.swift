@@ -68,7 +68,7 @@ import Testing
         let (connection, events) = (h.connection, h.events)
 
         let id = "0f8e2a4c-1b3d-4e5f-8a9b-0c1d2e3f4a5b"
-        connection.send(.fileOffer(transferId: id, name: "hello.txt", size: 5, sha256: hex(Data("hello".utf8)), mime: "text/plain"))
+        connection.send(.fileOffer(transferId: id, name: "hello.txt", size: 5, sha256: hex(Data("hello".utf8)), mime: "text/plain", batch: nil))
         #expect(try await events.nextMessage() == .fileAccept(transferId: id, offset: 0))
         connection.send(.chunk(transferId: id, offset: 0, data: Data("hello".utf8)))
         connection.send(.fileDone(transferId: id))
@@ -83,7 +83,7 @@ import Testing
         defer { h.server.stop() }
 
         let id = "0f8e2a4c-1b3d-4e5f-8a9b-0c1d2e3f4a5b"
-        h.connection.send(.fileOffer(transferId: id, name: "hello.txt", size: 5, sha256: hex(Data("hello".utf8)), mime: "text/plain"))
+        h.connection.send(.fileOffer(transferId: id, name: "hello.txt", size: 5, sha256: hex(Data("hello".utf8)), mime: "text/plain", batch: nil))
         #expect(try await h.events.nextMessage() == .fileAccept(transferId: id, offset: 0))
         h.connection.send(.chunk(transferId: id, offset: 0, data: Data("hello".utf8)))
         h.connection.send(.fileDone(transferId: id))
@@ -103,7 +103,7 @@ import Testing
         let sha = hex(content)
 
         let id1 = "0f8e2a4c-1b3d-4e5f-8a9b-0c1d2e3f4a5b"
-        h.connection.send(.fileOffer(transferId: id1, name: "big.bin", size: content.count, sha256: sha, mime: "application/octet-stream"))
+        h.connection.send(.fileOffer(transferId: id1, name: "big.bin", size: content.count, sha256: sha, mime: "application/octet-stream", batch: nil))
         #expect(try await h.events.nextMessage() == .fileAccept(transferId: id1, offset: 0))
         h.connection.send(.chunk(transferId: id1, offset: 0, data: content.prefix(half)))
         h.connection.send(.ping(id: 5))
@@ -114,7 +114,7 @@ import Testing
         let (connection, events, early) = try await reconnect(h)
         #expect(early.isEmpty)
         let id2 = "1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d"
-        connection.send(.fileOffer(transferId: id2, name: "big.bin", size: content.count, sha256: sha, mime: "application/octet-stream"))
+        connection.send(.fileOffer(transferId: id2, name: "big.bin", size: content.count, sha256: sha, mime: "application/octet-stream", batch: nil))
         #expect(try await events.nextMessage() == .fileAccept(transferId: id2, offset: half))
         connection.send(.chunk(transferId: id2, offset: UInt64(half), data: content.suffix(from: half)))
         connection.send(.fileDone(transferId: id2))
@@ -130,7 +130,7 @@ import Testing
         try Data("abc".utf8).write(to: url)
 
         h.transfers.send([url], to: base.phone.fingerprint)
-        guard case let .fileOffer(id, name, size, sha256, _) = try await h.events.nextMessage() else {
+        guard case let .fileOffer(id, name, size, sha256, _, _) = try await h.events.nextMessage() else {
             throw UnexpectedEvent(description: "expected file_offer")
         }
         #expect(name == "note.txt")
@@ -154,7 +154,7 @@ import Testing
         try Data("abc".utf8).write(to: url)
 
         h.transfers.send([url], to: base.phone.fingerprint)
-        guard case let .fileOffer(firstId, _, _, sha256, _) = try await h.events.nextMessage() else {
+        guard case let .fileOffer(firstId, _, _, sha256, _, _) = try await h.events.nextMessage() else {
             throw UnexpectedEvent(description: "expected file_offer")
         }
         h.connection.cancel()
@@ -164,7 +164,7 @@ import Testing
         let (_, events, early) = try await reconnect(h)
         var offer = early.first
         if offer == nil { offer = try await events.nextMessage() }
-        guard case let .fileOffer(secondId, name, _, secondSha, _) = offer else {
+        guard case let .fileOffer(secondId, name, _, secondSha, _, _) = offer else {
             throw UnexpectedEvent(description: "expected file_offer, got \(String(describing: offer))")
         }
         #expect(secondId != firstId)
@@ -182,7 +182,7 @@ import Testing
         try Data((0..<(8 * FrameLimits.maxChunkData)).map { UInt8(truncatingIfNeeded: $0 &* 7) }).write(to: url)
 
         h.transfers.send([url], to: base.phone.fingerprint)
-        guard case let .fileOffer(oldId, _, _, _, _) = try await h.events.nextMessage() else {
+        guard case let .fileOffer(oldId, _, _, _, _, _) = try await h.events.nextMessage() else {
             throw UnexpectedEvent(description: "expected file_offer")
         }
         // Hold the transfers queue so the old session's accept is handled (and its chunks pumped) only after the new

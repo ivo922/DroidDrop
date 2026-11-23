@@ -127,7 +127,7 @@ final class OutcomeRecorder: @unchecked Sendable {
 
     /// Waits for the next message, which must be an offer, and returns its id.
     private func offerID(_ link: FakeLink, name: String? = nil) async throws -> String {
-        guard case .fileOffer(let id, let offered, _, _, _) = try await link.next() else {
+        guard case .fileOffer(let id, let offered, _, _, _, _) = try await link.next() else {
             throw UnexpectedEvent(description: "no offer")
         }
         if let name { #expect(offered == name) }
@@ -138,7 +138,7 @@ final class OutcomeRecorder: @unchecked Sendable {
         let data = Data((0..<2_621_440).map { UInt8($0 % 253) })
         let url = try write(data, name: "report.pdf")
         queue.sync { sender.enqueue([url]); sender.connected(link) }
-        guard case .fileOffer(let id, "report.pdf", 2_621_440, let sha, "application/pdf") = try await link.next() else {
+        guard case .fileOffer(let id, "report.pdf", 2_621_440, let sha, "application/pdf", _) = try await link.next() else {
             Issue.record("no offer"); return
         }
         #expect(sha == hex(data))
@@ -206,7 +206,7 @@ final class OutcomeRecorder: @unchecked Sendable {
         let data = sample(2_621_440)
         let url = try write(data, name: "big.bin")
         queue.sync { sender.enqueue([url]); sender.connected(link) }
-        guard case .fileOffer(let id1, _, let size1, let sha1, _) = try await link.next() else {
+        guard case .fileOffer(let id1, _, let size1, let sha1, _, _) = try await link.next() else {
             Issue.record("no offer"); return
         }
         queue.sync { sender.receive(.fileAccept(transferId: id1, offset: 0)) }
@@ -214,7 +214,7 @@ final class OutcomeRecorder: @unchecked Sendable {
         queue.sync { sender.disconnected() }
         let link2 = FakeLink()
         queue.sync { sender.connected(link2) }
-        guard case .fileOffer(let id2, "big.bin", let size2, let sha2, _) = try await link2.next() else {
+        guard case .fileOffer(let id2, "big.bin", let size2, let sha2, _, _) = try await link2.next() else {
             Issue.record("no second offer"); return
         }
         #expect(id2 != id1)

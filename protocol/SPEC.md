@@ -84,12 +84,13 @@ Common member formats:
 
 | type | direction | members |
 |---|---|---|
-| `file_offer` | sender → receiver | `transferId`: uuid, `name`: nonempty, `size`: int, `sha256`: sha256hex, `mime`: nonempty |
+| `file_offer` | sender → receiver | `transferId`: uuid, `name`: nonempty, `size`: int, `sha256`: sha256hex, `mime`: nonempty, `batch`: object (optional, see §9.2) |
 | `file_accept` | receiver → sender | `transferId`, `offset`: int |
 | `file_reject` | receiver → sender | `transferId`, `reason`: string |
 | `file_done` | sender → receiver | `transferId` |
 | `file_result` | receiver → sender | `transferId`, `ok`: bool, `reason`: string (optional) |
 | `file_cancel` | either | `transferId` |
+| `batch_end` | sender → receiver | `batch`: uuid, `count`: int ≥ 1, `sent`: int, `cancelled`: bool (optional, see §9.2) |
 
 ## 5. Session
 
@@ -166,6 +167,35 @@ Applied to `file_offer.name` before use:
 3. If empty, use `file`.
 4. If longer than 200 UTF-8 bytes, shorten it to fit, cutting only at character boundaries. The extension (from the last `.`, when that `.` is not the first character) is kept intact if it is ≤ 16 UTF-8 bytes and only the part before it is shortened; otherwise the whole name is cut to 200 bytes.
 5. On collision in the destination folder, insert ` (n)` before the extension with the smallest `n ≥ 1` that is free.
+
+### 9.2 Batches
+
+A batch is a set of files sent together. Senders form batches of two or more files; a `count` of 1 is still valid on the wire. A file that belongs to one carries a `batch` object on its `file_offer`; a file sent alone has none. The per-file flow in §9 is unchanged.
+
+`file_offer.batch` members, all required when `batch` is present (`null` counts as absent):
+
+| member | type | meaning |
+|---|---|---|
+| `id` | uuid | Identifies the batch. |
+| `index` | int | 0-based position of this file in the batch. |
+| `count` | int ≥ 1 | Number of files in the batch. |
+| `size` | int | Bytes of every file in the batch, as known when it was queued. |
+| `before` | int | Bytes of the files ahead of this one. |
+
+`batch_end` closes a batch. `sent` is the number of files whose `file_result` was `ok`. `cancelled` is optional: `true` means the user on the sending side cancelled the rest. Senders MUST NOT encode `cancelled: false`; receivers treat `false`, `null` and absent alike.
+
+Sender rules:
+
+1. The files of one batch MUST be offered consecutively, in index order, and MUST NOT be interleaved with another batch. §9 rule 6 is unchanged.
+2. A re-offer after a reconnect MUST carry the same `batch`.
+3. Once every file of the batch has an outcome, the sender MUST send `batch_end`, and MUST NOT send it if no `file_offer` of the batch was sent. If no session is up at that moment, the `batch_end` waits per peer and MUST be sent on the next session with that peer before any `file_offer`. Unpairing drops it. A user cancel gives every remaining file of the batch an outcome; that `batch_end` carries `cancelled: true`.
+
+Errors and tolerance:
+
+- Protocol errors (close the connection) are only the per-message rules: a missing or ill-typed member, `index ≥ count`, `before > size`, `count = 0`, and `sent > count`.
+- Anything that spans several messages is tolerated: offers of one batch that disagree on `count` or `size` (the latest offer wins), a `batch_end` whose `count` differs from the offers (`batch_end` wins), an index that repeats or goes backwards (a re-offer), and `before` plus the file's size exceeding `size` (progress is clamped).
+- A `batch_end` for a batch the receiver does not know is ignored.
+- Unknown members inside `batch` are ignored, like everywhere else. An older receiver ignores `batch` and treats the file as a single one, and ignores `batch_end` as an unknown type.
 
 ## 10. Versioning
 

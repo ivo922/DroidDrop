@@ -123,7 +123,7 @@ public final class FileTransfers: @unchecked Sendable {
 
     private func route(_ message: Message, from fingerprint: Data) {
         switch message {
-        case let .fileOffer(transferId, name, size, sha256, _):
+        case let .fileOffer(transferId, name, size, sha256, _, _):
             guard let receiver = receivers[fingerprint] else { return }
             let reply = receiver.offer(transferId: transferId, name: name, size: size, sha256: sha256)
             links[fingerprint]?.send(reply)
