@@ -38,6 +38,7 @@ final class AppModel: ObservableObject {
 
     init(notifier: TransferNotifier) throws {
         self.notifier = notifier
+        notifier.receivedFolder = receivedFilesFolder
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appending(path: "DroidDrop")
         let identity = try IdentityStore(directory: support).loadOrCreate(commonName: "DroidDrop Mac")
@@ -97,6 +98,16 @@ final class AppModel: ObservableObject {
                 }
             }
         }
+        transfers.onBatchSummary = { [weak self] fingerprint, summary in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    let name = self.pairedPeers.first { $0.fingerprint == fingerprint }?.name ?? "your phone"
+                    self.notifier.postSummary(summary, peerName: name, fingerprint: fingerprint)
+                }
+            }
+        }
+        notifier.onRetry = { [weak self] urls, fingerprint in self?.retry(urls, to: fingerprint) }
         clipboard = ClipboardMonitor { [weak server] message in server?.broadcast(message) }
         server.onConnectedPeersChanged = { [weak self] peers in
             Task { @MainActor [weak self] in
@@ -111,7 +122,7 @@ final class AppModel: ObservableObject {
                 guard let self else { return }
                 // "Pair Again" removed the old fingerprint (the server skips a replace by the same one): drop its queue.
                 if let replaced = self.replacingPeer?.fingerprint, replaced != peer.fingerprint {
-                    self.transfers?.cancelSending(to: replaced)
+                    self.transfers?.cancelSending(to: replaced, silent: true)
                 }
                 self.justPaired = peer
                 self.pairURI = nil
@@ -196,6 +207,14 @@ final class AppModel: ObservableObject {
         transfers?.send(urls, to: peer.fingerprint)
     }
 
+    /// Resends a summary's failed files, connected or not (R11), but only to a phone that is still paired.
+    func retry(_ urls: [URL], to fingerprint: Data) {
+        // Ask the server, not the cached `pairedPeers`: a Retry clicked right after a relaunch (or while the listener
+        // waits for a network) arrives before that cache is filled, and would be dropped.
+        guard let server, server.pairedPeers().contains(where: { $0.fingerprint == fingerprint }) else { return }
+        transfers?.send(urls, to: fingerprint)
+    }
+
     /// Cancels the active file and drops the queue, including files waiting for a disconnected phone.
     func cancelSending() {
         transfers?.cancelAllSending()
@@ -234,7 +253,7 @@ final class AppModel: ObservableObject {
         do {
             try server.unpair(fingerprint: fingerprint)
             unpairError = nil
-            transfers?.cancelSending(to: fingerprint)  // an unpaired phone's queued files must not linger
+            transfers?.cancelSending(to: fingerprint, silent: true)  // an unpaired phone's queued files must not linger
             refreshPeers()
             return nil
         } catch {
