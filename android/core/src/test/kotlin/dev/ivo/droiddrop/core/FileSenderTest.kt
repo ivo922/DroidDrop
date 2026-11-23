@@ -1,8 +1,12 @@
 package dev.ivo.droiddrop.core
 
+import dev.ivo.droiddrop.core.protocol.BatchInfo
 import dev.ivo.droiddrop.core.protocol.Frame
 import dev.ivo.droiddrop.core.protocol.Message
 import dev.ivo.droiddrop.core.session.MessageSender
+import dev.ivo.droiddrop.core.transfer.BatchFailure
+import dev.ivo.droiddrop.core.transfer.BatchProgress
+import dev.ivo.droiddrop.core.transfer.BatchSummary
 import dev.ivo.droiddrop.core.transfer.Direction
 import dev.ivo.droiddrop.core.transfer.FileSender
 import dev.ivo.droiddrop.core.transfer.OutgoingFile
@@ -16,6 +20,7 @@ import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -50,9 +55,11 @@ class FileSenderTest {
         private val chunkGate: Semaphore? = null,
         private val events: MutableList<String>? = null,
         private val label: String = "",
+        private val failBatchEnd: Boolean = false,
     ) : MessageSender {
         private val sent = Channel<Any>(Channel.UNLIMITED)
         override fun send(message: Message) {
+            if (failBatchEnd && message is Message.BatchEnd) throw IOException("link down")
             events?.add("$label ${message::class.simpleName}")
             sent.trySend(message)
         }
@@ -64,6 +71,7 @@ class FileSenderTest {
             }
         }
         suspend fun next(): Any = sent.receive()
+        fun poll(): Any? = sent.tryReceive().getOrNull()
         suspend fun chunk(): Frame.Chunk = next() as Frame.Chunk
         suspend fun offer(name: String? = null): Message.FileOffer {
             val offer = next() as Message.FileOffer
@@ -73,14 +81,22 @@ class FileSenderTest {
     }
 
     /** One sender plus an outcome recorder, inside a scope whose children are cancelled when the test ends. */
-    inner class Harness(private val scope: CoroutineScope) {
-        val sender = FileSender()
+    inner class Harness(
+        private val scope: CoroutineScope,
+        keepFailedForRetry: Boolean = false,
+        collectSummaries: Boolean = true,
+    ) {
+        val sender = FileSender(keepFailedForRetry = keepFailedForRetry)
         val outcomes = Channel<TransferOutcome>(Channel.UNLIMITED)
+        val summaries = Channel<BatchSummary>(Channel.UNLIMITED)
         val link = FakeLink()
         val replies = Channel<Message>(Channel.UNLIMITED)
 
         init {
             scope.launch(start = CoroutineStart.UNDISPATCHED) { sender.outcomes.collect { outcomes.send(it) } }
+            if (collectSummaries) {
+                scope.launch(start = CoroutineStart.UNDISPATCHED) { sender.summaries.collect { summaries.send(it) } }
+            }
         }
 
         fun start(link: MessageSender = this.link, replies: Channel<Message> = this.replies): Job =
@@ -91,10 +107,14 @@ class FileSenderTest {
         }
     }
 
-    private fun sending(block: suspend Harness.() -> Unit) = runBlocking {
+    private fun sending(
+        keepFailedForRetry: Boolean = false,
+        collectSummaries: Boolean = true,
+        block: suspend Harness.() -> Unit,
+    ) = runBlocking {
         withTimeout(5_000) {
             try {
-                Harness(this).block()
+                Harness(this, keepFailedForRetry, collectSummaries).block()
             } finally {
                 coroutineContext.cancelChildren()
             }
@@ -219,7 +239,8 @@ class FileSenderTest {
     }
 
     @Test fun rejectAndFailedResultMoveToNextFile() = sending {
-        sender.enqueue(listOf(outgoing("a.txt", "a".toByteArray()), outgoing("b.txt", "b".toByteArray())))
+        sender.enqueue(listOf(outgoing("a.txt", "a".toByteArray())))
+        sender.enqueue(listOf(outgoing("b.txt", "b".toByteArray())))
         assertEquals(2, sender.pending.value)
         start()
         val idA = link.offer("a.txt").transferId
@@ -237,7 +258,8 @@ class FileSenderTest {
     }
 
     @Test fun peerCancelFailsFileAndContinues() = sending {
-        sender.enqueue(listOf(outgoing("a.txt", "a".toByteArray()), outgoing("b.txt", "b".toByteArray())))
+        sender.enqueue(listOf(outgoing("a.txt", "a".toByteArray())))
+        sender.enqueue(listOf(outgoing("b.txt", "b".toByteArray())))
         start()
         val idA = link.offer("a.txt").transferId
         reply(Message.FileAccept(idA, 0))
@@ -250,7 +272,7 @@ class FileSenderTest {
     }
 
     @Test fun cancelAllSendsCancelAndEmptiesQueue() = sending {
-        sender.enqueue(listOf("a.txt", "b.txt", "c.txt").map { outgoing(it, it.toByteArray()) })
+        listOf("a.txt", "b.txt", "c.txt").forEach { sender.enqueue(listOf(outgoing(it, it.toByteArray()))) }
         start()
         val id = link.offer("a.txt").transferId
         assertEquals(TransferStatus(Direction.OUTGOING, "a.txt", 0, 5, queued = 2), sender.status.value)
@@ -300,7 +322,8 @@ class FileSenderTest {
     }
 
     @Test fun ignoresRepliesForOtherIds() = sending {
-        sender.enqueue(listOf(outgoing("a.bin", sample(1000)), outgoing("b.txt", "b".toByteArray())))
+        sender.enqueue(listOf(outgoing("a.bin", sample(1000))))
+        sender.enqueue(listOf(outgoing("b.txt", "b".toByteArray())))
         start()
         val idA = link.offer("a.bin").transferId
         reply(Message.FileAccept(otherId, 0))
@@ -343,6 +366,300 @@ class FileSenderTest {
         reply(Message.FileAccept(id, 4))
         assertEquals(Message.FileCancel(id), link.next())
         assertEquals(failed("a.txt", "file changed or unreadable"), outcomes.receive())
+    }
+
+    // ---- Batches (SPEC 9.2) ----
+
+    private fun batchOf(vararg names: String) = names.map { outgoing(it, it.toByteArray()) }
+
+    /** Offers, accepts, streams the single chunk, then answers with a file_result. Returns the offer. */
+    private suspend fun Harness.complete(
+        name: String,
+        ok: Boolean = true,
+        reason: String? = null,
+        on: FakeLink = link,
+        check: () -> Unit = {},
+    ): Message.FileOffer {
+        val offer = on.offer(name)
+        check()
+        reply(Message.FileAccept(offer.transferId, 0))
+        on.chunk()
+        assertEquals(Message.FileDone(offer.transferId), on.next())
+        reply(Message.FileResult(offer.transferId, ok, reason))
+        return offer
+    }
+
+    @Test fun twoFilesFormABatch() = sending {
+        sender.enqueue(listOf(outgoing("a.txt", "hello world".toByteArray()), outgoing("b.txt", "12345".toByteArray())))
+        start()
+        val first = complete("a.txt")
+        val id = first.batch!!.id
+        assertEquals(BatchInfo(id, 0, 2, 16, 0), first.batch)
+        val second = complete("b.txt")
+        assertEquals(BatchInfo(id, 1, 2, 16, 11), second.batch)
+        assertEquals(Message.BatchEnd(id, 2, 2), link.next())
+        assertEquals(BatchSummary(Direction.OUTGOING, id, 2, 2), summaries.receive())
+        assertEquals(0, sender.pending.value)
+    }
+
+    @Test fun singleFileIsUnbatched() = sending {
+        sender.enqueue(batchOf("a.txt"))
+        start()
+        assertNull(complete("a.txt").batch)
+        assertEquals(TransferOutcome.Sent("a.txt"), outcomes.receive())
+        sender.enqueue(batchOf("next.txt"))
+        link.offer("next.txt") // a BatchEnd in between would fail the cast
+        assertTrue(summaries.tryReceive().isFailure)
+    }
+
+    @Test fun statusCountsThroughBatch() = sending {
+        sender.enqueue(listOf(outgoing("a.txt", "hello world".toByteArray()), outgoing("b.txt", "12345".toByteArray())))
+        start()
+        complete("a.txt")
+        val offer = link.offer("b.txt")
+        assertEquals(BatchProgress(1, 2, 11, 16), sender.status.value!!.batch)
+        reply(Message.FileAccept(offer.transferId, 0))
+        link.chunk()
+        assertEquals(Message.FileDone(offer.transferId), link.next())
+        assertEquals(BatchProgress(1, 2, 16, 16), sender.status.value!!.batch)
+    }
+
+    @Test fun progressClampedWhenFileGrew() = sending {
+        sender.enqueue(listOf(outgoing("a.txt", "hello world".toByteArray()), outgoing("b.txt", "12345".toByteArray())))
+        File(tmp, "a.txt").appendBytes("123456789".toByteArray()) // 20 bytes now, 11 at enqueue
+        start()
+        val offer = link.offer("a.txt")
+        assertEquals(20L, offer.size)
+        assertEquals(BatchInfo(offer.batch!!.id, 0, 2, 16, 0), offer.batch)
+        reply(Message.FileAccept(offer.transferId, 0))
+        link.chunk()
+        assertEquals(Message.FileDone(offer.transferId), link.next())
+        val progress = sender.status.value!!.batch!!
+        assertEquals(BatchProgress(0, 2, 11, 16), progress)
+    }
+
+    @Test fun failureListedInSummary() = sending {
+        sender.enqueue(batchOf("a.txt", "b.txt"))
+        start()
+        val id = complete("a.txt").batch!!.id
+        complete("b.txt", ok = false, reason = "hash_mismatch")
+        assertEquals(Message.BatchEnd(id, 2, 1), link.next())
+        assertEquals(
+            BatchSummary(Direction.OUTGOING, id, 2, 1, failures = listOf(BatchFailure("b.txt", "hash_mismatch"))),
+            summaries.receive(),
+        )
+    }
+
+    @Test fun retryKeepsFailedFilesOpen() = sending(keepFailedForRetry = true) {
+        sender.enqueue(batchOf("a.txt", "b.txt"))
+        start()
+        complete("a.txt")
+        complete("b.txt", ok = false, reason = "hash_mismatch")
+        val summary = summaries.receive()
+        assertEquals(listOf("b.txt"), summary.retry.map { it.name })
+        assertEquals(0, released("b.txt"))
+        assertEquals(1, released("a.txt"))
+        summary.retry.forEach { it.release() }
+        assertEquals(1, released("b.txt"))
+    }
+
+    @Test fun failedFileReleasedWithoutRetryKeeping() = sending {
+        sender.enqueue(batchOf("a.txt", "b.txt"))
+        start()
+        complete("a.txt")
+        complete("b.txt", ok = false, reason = "hash_mismatch")
+        val summary = summaries.receive()
+        assertTrue(summary.retry.isEmpty())
+        assertEquals(1, released("b.txt"))
+    }
+
+    @Test fun reofferKeepsBatch() = sending {
+        sender.enqueue(batchOf("a.txt", "b.txt"))
+        val first = start()
+        complete("a.txt")
+        val offer1 = link.offer("b.txt")
+        first.cancelAndJoin()
+        val link2 = FakeLink()
+        start(link2, Channel(Channel.UNLIMITED))
+        val offer2 = link2.offer("b.txt")
+        assertNotEquals(offer1.transferId, offer2.transferId)
+        assertEquals(BatchInfo(offer1.batch!!.id, 1, 2, 10, 5), offer2.batch)
+        assertEquals(offer1.batch, offer2.batch)
+    }
+
+    @Test fun batchEndWaitsForNextSession() = sending {
+        sender.enqueue(batchOf("a.txt", "b.txt"))
+        val failing = FakeLink(failBatchEnd = true)
+        val first = start(failing)
+        val id = complete("a.txt", on = failing).batch!!.id
+        complete("b.txt", on = failing)
+        summaries.receive()
+        first.cancelAndJoin()
+        sender.enqueue(batchOf("c.txt"))
+        val link2 = FakeLink()
+        start(link2, Channel(Channel.UNLIMITED))
+        assertEquals(Message.BatchEnd(id, 2, 2), link2.next())
+        link2.offer("c.txt")
+    }
+
+    @Test fun cancelOfflineQueuesBatchEnd() = sending {
+        sender.enqueue(batchOf("a.txt", "b.txt"))
+        val first = start()
+        val id = complete("a.txt").batch!!.id
+        link.offer("b.txt")
+        first.cancelAndJoin()
+        sender.cancelAll()
+        assertEquals(BatchSummary(Direction.OUTGOING, id, 2, 1, cancelled = true), summaries.receive())
+        assertEquals(1, released("b.txt"))
+        val link2 = FakeLink()
+        start(link2, Channel(Channel.UNLIMITED))
+        assertEquals(Message.BatchEnd(id, 2, 1, cancelled = true), link2.next())
+    }
+
+    @Test fun cancelQueuedOnlyBatchIsSilent() = sending {
+        sender.enqueue(batchOf("a.txt", "b.txt"))
+        sender.cancelAll()
+        assertEquals(1, released("a.txt"))
+        assertEquals(1, released("b.txt"))
+        start()
+        sender.enqueue(batchOf("c.txt"))
+        link.offer("c.txt") // no BatchEnd first
+        assertTrue(summaries.tryReceive().isFailure)
+    }
+
+    @Test fun silentCancelDropsEverything() = sending {
+        sender.enqueue(batchOf("a.txt", "b.txt"))
+        start()
+        val id = complete("a.txt").batch!!.id
+        val offerB = link.offer("b.txt")
+        sender.cancelAll(silent = true)
+        assertEquals(Message.FileCancel(offerB.transferId), link.next())
+        assertEquals(TransferOutcome.Sent("a.txt", BatchInfo(id, 0, 2, 10, 0)), outcomes.receive())
+        assertEquals(
+            TransferOutcome.Failed(Direction.OUTGOING, "b.txt", "cancelled", BatchInfo(id, 1, 2, 10, 5)),
+            outcomes.receive(),
+        )
+        sender.enqueue(batchOf("c.txt"))
+        link.offer("c.txt") // no BatchEnd first
+        assertTrue(summaries.tryReceive().isFailure)
+    }
+
+    @Test fun silentCancelDropsPendingEnd() = sending {
+        sender.enqueue(batchOf("a.txt", "b.txt"))
+        val failing = FakeLink(failBatchEnd = true)
+        val first = start(failing)
+        complete("a.txt", on = failing)
+        complete("b.txt", on = failing)
+        summaries.receive()
+        first.cancelAndJoin()
+        sender.cancelAll(silent = true)
+        val link2 = FakeLink()
+        start(link2, Channel(Channel.UNLIMITED))
+        sender.enqueue(batchOf("c.txt"))
+        link2.offer("c.txt") // no BatchEnd first
+    }
+
+    @Test fun outcomesTaggedWithBatch() = sending {
+        sender.enqueue(batchOf("a.txt", "b.txt"))
+        start()
+        val id = complete("a.txt").batch!!.id
+        complete("b.txt")
+        assertEquals(TransferOutcome.Sent("a.txt", BatchInfo(id, 0, 2, 10, 0)), outcomes.receive())
+        assertEquals(TransferOutcome.Sent("b.txt", BatchInfo(id, 1, 2, 10, 5)), outcomes.receive())
+    }
+
+    @Test fun queuedCountsOnlyFilesAfterTheActiveBatch() = sending {
+        sender.enqueue(batchOf("a.txt", "b.txt"))
+        sender.enqueue(batchOf("c.txt"))
+        start()
+        complete("a.txt", on = link, check = { assertEquals(1, sender.status.value!!.queued) })
+        complete("b.txt", on = link, check = { assertEquals(1, sender.status.value!!.queued) })
+        assertTrue(link.next() is Message.BatchEnd)
+        complete("c.txt", on = link, check = { assertEquals(0, sender.status.value!!.queued) })
+    }
+
+    @Test fun offlineCancelAfterOfferedFileGivesSummaryAndEnd() = sending {
+        sender.enqueue(batchOf("a.txt", "b.txt"))
+        val first = start()
+        val id = link.offer("a.txt").batch!!.id
+        first.cancelAndJoin() // dropped mid-file: offered, but no outcome
+        sender.cancelAll()
+        assertEquals(BatchSummary(Direction.OUTGOING, id, 2, 0, cancelled = true), summaries.receive())
+        val link2 = FakeLink()
+        start(link2, Channel(Channel.UNLIMITED))
+        assertEquals(Message.BatchEnd(id, 2, 0, cancelled = true), link2.next())
+    }
+
+    @Test fun cancelWhileHashingFirstFileGivesNoSummaryOrEnd() = sending {
+        val big = File(tmp, "big.bin")
+        RandomAccessFile(big, "rw").use { it.setLength(512L * mebibyte) } // sparse; hashing takes a moment
+        val counter = releases.getOrPut("big.bin") { AtomicInteger() }
+        sender.enqueue(
+            listOf(OutgoingFile("big.bin", "x/y", FileChannel.open(big.toPath())) { counter.incrementAndGet() }) + batchOf("b.txt"),
+        )
+        start()
+        while (sender.status.value == null) yield() // published right before hashing starts
+        sender.cancelAll()
+        assertEquals(TransferOutcome.Failed::class, outcomes.receive()::class)
+        sender.enqueue(batchOf("c.txt"))
+        link.offer("c.txt") // no BatchEnd first
+        assertTrue(summaries.tryReceive().isFailure)
+    }
+
+    @Test fun onlineCancelEndsBatchCancelled() = sending {
+        sender.enqueue(batchOf("a.txt", "b.txt"))
+        start()
+        val id = complete("a.txt").batch!!.id
+        val offerB = link.offer("b.txt")
+        sender.cancelAll()
+        assertEquals(Message.FileCancel(offerB.transferId), link.next())
+        assertEquals(Message.BatchEnd(id, 2, 1, cancelled = true), link.next())
+        assertEquals(BatchSummary(Direction.OUTGOING, id, 2, 1, cancelled = true), summaries.receive())
+    }
+
+    @Test fun keptFilesReleasedWhenBatchEndsCancelled() = sending(keepFailedForRetry = true) {
+        sender.enqueue(batchOf("a.txt", "b.txt", "c.txt"))
+        start()
+        complete("a.txt", ok = false, reason = "hash_mismatch")
+        link.offer("b.txt")
+        sender.cancelAll()
+        val summary = summaries.receive()
+        assertTrue(summary.cancelled)
+        assertTrue(summary.retry.isEmpty())
+        assertEquals(listOf(BatchFailure("a.txt", "hash_mismatch")), summary.failures)
+        assertEquals(1, released("a.txt"))
+    }
+
+    @Test fun keptFilesReleasedWhenBatchEndsSilent() = sending(keepFailedForRetry = true) {
+        sender.enqueue(batchOf("a.txt", "b.txt", "c.txt"))
+        start()
+        complete("a.txt", ok = false, reason = "hash_mismatch")
+        link.offer("b.txt")
+        sender.cancelAll(silent = true)
+        assertEquals(TransferOutcome.Failed::class, outcomes.receive()::class)
+        assertEquals(TransferOutcome.Failed::class, outcomes.receive()::class)
+        assertEquals(1, released("a.txt"))
+        assertTrue(summaries.tryReceive().isFailure)
+    }
+
+    @Test fun retryFilesReleasedWhenNobodyCollectsSummaries() = sending(keepFailedForRetry = true, collectSummaries = false) {
+        sender.enqueue(batchOf("a.txt", "b.txt"))
+        start()
+        complete("a.txt")
+        complete("b.txt", ok = false, reason = "hash_mismatch")
+        outcomes.receive()
+        outcomes.receive()
+        assertEquals(1, released("b.txt"))
+    }
+
+    @Test fun batchEndIsWrittenBeforeLastOutcomeIsObservable() = sending {
+        sender.enqueue(batchOf("a.txt", "b.txt"))
+        start()
+        val id = complete("a.txt").batch!!.id
+        complete("b.txt")
+        outcomes.receive()
+        outcomes.receive() // the last Sent
+        assertEquals(Message.BatchEnd(id, 2, 2), link.poll())
     }
 
     @Test fun releaseIsIdempotent() {
