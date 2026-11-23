@@ -1,5 +1,6 @@
 package dev.ivo.droiddrop.core.transfer
 
+import dev.ivo.droiddrop.core.protocol.BatchInfo
 import dev.ivo.droiddrop.core.protocol.Frame
 import dev.ivo.droiddrop.core.protocol.Message
 import java.io.File
@@ -18,10 +19,11 @@ class FileReceiver(private val partials: PartialStore, private val destination: 
         val partial: File,
         val channel: FileChannel,
         var received: Long,
+        val batch: BatchInfo?,
     )
 
     /** A re-offer of a file already saved, whose `file_result` was lost: accepted at its end, answered from the marker. */
-    private class Completed(val transferId: String, val name: String, val location: String)
+    private class Completed(val transferId: String, val name: String, val location: String, val batch: BatchInfo?)
 
     private var active: Active? = null
     private var completed: Completed? = null
@@ -38,7 +40,7 @@ class FileReceiver(private val partials: PartialStore, private val destination: 
     fun offer(offer: Message.FileOffer): Message {
         close()
         partials.completedLocation(offer.sha256, offer.size, destination::exists)?.let { location ->
-            completed = Completed(offer.transferId, FileName.sanitize(offer.name), location)
+            completed = Completed(offer.transferId, FileName.sanitize(offer.name), location, offer.batch)
             return Message.FileAccept(offer.transferId, offer.size)
         }
         val partial = partials.file(offer.sha256, offer.size)
@@ -48,7 +50,7 @@ class FileReceiver(private val partials: PartialStore, private val destination: 
             val channel = FileChannel.open(
                 partial.toPath(), StandardOpenOption.WRITE, StandardOpenOption.CREATE, StandardOpenOption.APPEND,
             )
-            val current = Active(offer.transferId, FileName.sanitize(offer.name), offer.size, offer.sha256, partial, channel, channel.size())
+            val current = Active(offer.transferId, FileName.sanitize(offer.name), offer.size, offer.sha256, partial, channel, channel.size(), offer.batch)
             active = current
             publishStatus(current)
             Message.FileAccept(offer.transferId, current.received)
@@ -77,7 +79,7 @@ class FileReceiver(private val partials: PartialStore, private val destination: 
     fun done(done: Message.FileDone): Pair<Message, TransferOutcome>? {
         completed?.takeIf { it.transferId == done.transferId }?.let {
             completed = null
-            return Message.FileResult(it.transferId, true) to TransferOutcome.Received(it.name, it.location)
+            return Message.FileResult(it.transferId, true) to TransferOutcome.Received(it.name, it.location, it.batch)
         }
         val current = active?.takeIf { it.transferId == done.transferId } ?: return null
         active = null
@@ -87,7 +89,7 @@ class FileReceiver(private val partials: PartialStore, private val destination: 
         fun failure(reason: String): Pair<Message, TransferOutcome> {
             current.partial.delete()
             return Message.FileResult(current.transferId, false, reason) to
-                TransferOutcome.Failed(Direction.INCOMING, current.name, reason)
+                TransferOutcome.Failed(Direction.INCOMING, current.name, reason, current.batch)
         }
 
         if (current.received != current.size) return failure("size_mismatch")
@@ -106,7 +108,7 @@ class FileReceiver(private val partials: PartialStore, private val destination: 
         }
         partials.markCompleted(current.sha256, current.size, location)
         current.partial.delete() // a copying destination leaves it behind
-        return Message.FileResult(current.transferId, true) to TransferOutcome.Received(current.name, location)
+        return Message.FileResult(current.transferId, true) to TransferOutcome.Received(current.name, location, current.batch)
     }
 
     /** The peer's `file_cancel`: stops the transfer, keeps the partial. */
@@ -126,10 +128,13 @@ class FileReceiver(private val partials: PartialStore, private val destination: 
     private fun abort(current: Active, reason: String): Pair<Message, TransferOutcome> {
         close()
         current.partial.delete()
-        return Message.FileCancel(current.transferId) to TransferOutcome.Failed(Direction.INCOMING, current.name, reason)
+        return Message.FileCancel(current.transferId) to TransferOutcome.Failed(Direction.INCOMING, current.name, reason, current.batch)
     }
 
     private fun publishStatus(current: Active) {
-        status = TransferStatus(Direction.INCOMING, current.name, current.received, current.size)
+        val batch = current.batch?.let {
+            BatchProgress(it.index.toIntClamped(), it.count.toIntClamped(), (it.before + current.received).coerceIn(0, it.size), it.size)
+        }
+        status = TransferStatus(Direction.INCOMING, current.name, current.received, current.size, batch = batch)
     }
 }

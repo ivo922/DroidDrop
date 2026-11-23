@@ -1,7 +1,9 @@
 package dev.ivo.droiddrop.core
 
+import dev.ivo.droiddrop.core.protocol.BatchInfo
 import dev.ivo.droiddrop.core.protocol.Frame
 import dev.ivo.droiddrop.core.protocol.Message
+import dev.ivo.droiddrop.core.transfer.BatchProgress
 import dev.ivo.droiddrop.core.transfer.Direction
 import dev.ivo.droiddrop.core.transfer.DirectoryDestination
 import dev.ivo.droiddrop.core.transfer.FileReceiver
@@ -236,5 +238,43 @@ class FileReceiverTest {
         assertEquals(TransferOutcome.Received("photo.jpg", File(dest, "photo.jpg").absolutePath), outcome)
         assertArrayEquals(data, File(dest, "photo.jpg").readBytes())
         assertEquals(1, destinationCount())
+    }
+
+    private fun batchOffer(id: String, name: String, data: ByteArray, batch: BatchInfo, to: FileReceiver = receiver) =
+        to.offer(Message.FileOffer(id, name, data.size.toLong(), sha(data), "application/octet-stream", batch))
+
+    @Test fun statusCarriesBatchProgress() {
+        val data = sample(1000)
+        val batch = BatchInfo("b1", 2, 5, 10_000, 4_000)
+        assertEquals(Message.FileAccept(id1, 0), batchOffer(id1, "a.bin", data, batch))
+        assertEquals(TransferStatus(Direction.INCOMING, "a.bin", 0, 1000, batch = BatchProgress(2, 5, 4_000, 10_000)), receiver.status)
+        assertNull(chunk(id1, 0, data.copyOfRange(0, 600)))
+        assertEquals(BatchProgress(2, 5, 4_600, 10_000), receiver.status!!.batch)
+    }
+
+    @Test fun outcomeCarriesBatch() {
+        val data = sample(100)
+        val batch = BatchInfo("b1", 0, 2, 200, 0)
+        batchOffer(id1, "a.bin", data, batch)
+        chunk(id1, 0, data)
+        val saved = File(dest, "a.bin").absolutePath
+        assertEquals(TransferOutcome.Received("a.bin", saved, batch), receiver.done(Message.FileDone(id1))!!.second)
+        // the completed path
+        val second = makeReceiver()
+        batchOffer(id2, "a.bin", data, batch, to = second)
+        assertEquals(TransferOutcome.Received("a.bin", saved, batch), second.done(Message.FileDone(id2))!!.second)
+        // a failure
+        val bad = ByteArray(10) { 1 }
+        batchOffer(id1, "b.bin", bad, batch.copy(index = 1))
+        val (_, failed) = chunk(id1, 5, bad)!!
+        assertEquals(TransferOutcome.Failed(Direction.INCOMING, "b.bin", "out_of_order", batch.copy(index = 1)), failed)
+    }
+
+    @Test fun progressClamped() {
+        val data = sample(1000)
+        val batch = BatchInfo("b1", 1, 2, 1_200, 700)
+        batchOffer(id1, "a.bin", data, batch)
+        assertNull(chunk(id1, 0, data))
+        assertEquals(BatchProgress(1, 2, 1_200, 1_200), receiver.status!!.batch)
     }
 }
