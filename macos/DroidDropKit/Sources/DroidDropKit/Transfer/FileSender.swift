@@ -23,7 +23,30 @@ public final class FileSender: @unchecked Sendable {
     public static let unreadable = "file changed or unreadable"
 
     public var onStatus: ((TransferStatus?) -> Void)?
+    /// Outcomes of unbatched files only.
     public var onOutcome: ((TransferOutcome) -> Void)?
+    /// Outcomes of batch files, with the file's batch, INSTEAD of `onOutcome` (never both).
+    public var onBatchFileOutcome: ((TransferOutcome, BatchInfo) -> Void)?
+    /// One summary per batch that had an outcome (a cancelled batch: one that had a file offered). Never for a silent cancel.
+    public var onBatchSummary: ((BatchSummary) -> Void)?
+
+    /// Per-batch tally, shared by the batch's items.
+    private final class Tracker {
+        let id: String
+        let count: Int
+        var offered = false  // a file_offer of the batch was written
+        var resolved = 0     // files that reached an outcome or were dropped
+        var reported = 0     // files that reached an outcome
+        var sent = 0
+        var cancelled = false
+        var silent = false   // dropped by an unpair: no summary, no batch_end
+        var failures: [BatchFailure] = []
+        var failedFiles: [URL] = []
+        init(id: String, count: Int) { self.id = id; self.count = count }
+    }
+
+    /// A finished batch: its summary, if it earns one.
+    private struct Completion { let summary: BatchSummary? }
 
     private struct Item {
         let url: URL
@@ -31,6 +54,11 @@ public final class FileSender: @unchecked Sendable {
         let serial: Int
         /// Computed once, kept across re-offers.
         var digest: (hex: String, size: Int)?
+        /// Set for files enqueued together with others; kept across re-offers.
+        var batch: BatchInfo?
+        var tracker: Tracker?
+        /// The size at enqueue time: this file's share of the batch progress is clamped to it.
+        var enqueuedSize = 0
         var name: String { url.lastPathComponent }
     }
 
@@ -69,6 +97,8 @@ public final class FileSender: @unchecked Sendable {
     private var active: Active?
     /// Bumped whenever the session or the active file changes; stale chunk completions carry an older value.
     private var generation = 0
+    /// `batch_end`s waiting for a session. Written before any `file_offer`.
+    private var pendingEnds: [Message] = []
 
     public init(queue: DispatchQueue, makeID: @escaping () -> String = { UUID().uuidString.lowercased() },
                 hash: @escaping @Sendable (URL) throws -> (hex: String, size: Int) = { try FileDigest.sha256(of: $0) }) {
@@ -80,12 +110,33 @@ public final class FileSender: @unchecked Sendable {
     /// Files queued, including the active one.
     public var queuedCount: Int { items.count }
 
-    /// Queues regular files in order; a directory is reported failed right away (R11).
+    /// Queues regular files in order; a directory is reported failed right away (R11). Two or more regular files
+    /// form a batch (SPEC 9.2); one is sent unbatched.
     public func enqueue(_ urls: [URL]) {
+        var regular: [URL] = []
         for url in urls {
             if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
                 onOutcome?(.failed(.outgoing, name: url.lastPathComponent, reason: "folders are not supported"))
             } else {
+                regular.append(url)
+            }
+        }
+        if regular.count >= 2 {
+            let sizes = regular.map { (try? $0.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0 }
+            let tracker = Tracker(id: makeID(), count: regular.count)
+            let total = sizes.reduce(0, +)
+            var before = 0
+            for (index, url) in regular.enumerated() {
+                nextSerial += 1
+                var item = Item(url: url, serial: nextSerial)
+                item.batch = BatchInfo(id: tracker.id, index: index, count: regular.count, size: total, before: before)
+                item.tracker = tracker
+                item.enqueuedSize = sizes[index]
+                before += sizes[index]
+                items.append(item)
+            }
+        } else {
+            for url in regular {
                 nextSerial += 1
                 items.append(Item(url: url, serial: nextSerial))
             }
@@ -126,28 +177,49 @@ public final class FileSender: @unchecked Sendable {
     }
 
     /// `file_cancel` for the active file (reported failed, "cancelled"), then empties the queue (R10).
-    public func cancelAll() {
-        let name = items.first?.name
+    /// A batch that had a file offered ends with a cancelled `batch_end` (queued if no session is up) and summary.
+    /// With `silent` (unpair) nothing is reported for batches and pending `batch_end`s are dropped.
+    public func cancelAll(silent: Bool = false) {
+        let current = active != nil ? items.first : nil
         if let id = active?.transferId { link?.send(.fileCancel(transferId: id)) }
-        let wasActive = active != nil
         closeActive()
         generation += 1
+        let dropped = items
         items.removeAll()
-        if wasActive, let name {
-            onOutcome?(.failed(.outgoing, name: name, reason: "cancelled"))
-            onStatus?(nil)
+        if silent { pendingEnds.removeAll() }
+        for item in dropped {
+            item.tracker?.cancelled = true
+            if silent { item.tracker?.silent = true }
         }
+        var completions: [BatchSummary?] = []
+        var currentOutcome: TransferOutcome?
+        for item in dropped {
+            if let current, item.serial == current.serial {
+                currentOutcome = .failed(.outgoing, name: item.name, reason: "cancelled")
+                if let done = resolve(item, currentOutcome, userCancelled: true) { completions.append(done.summary) }
+            } else if let done = resolve(item, nil, userCancelled: true) {
+                completions.append(done.summary)
+            }
+        }
+        flushEnds()
+        if let current, let currentOutcome {
+            onStatus?(nil)
+            report(currentOutcome, for: current)
+        }
+        for case let summary? in completions { onBatchSummary?(summary) }
     }
 
     // MARK: - Steps
 
     private func startHeadIfIdle() {
-        guard link != nil, active == nil, let head = items.first else { return }
+        guard link != nil, active == nil else { return }
+        flushEnds()  // a batch_end always precedes the next file_offer, even of another batch
+        guard let head = items.first else { return }
         generation += 1
         active = Active(phase: .hashing)
         let size = head.digest?.size ?? (try? head.url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         active?.size = size
-        onStatus?(status(name: head.name, bytesDone: 0, size: size))
+        onStatus?(status(head, bytesDone: 0, size: size))
         if head.digest != nil {
             offerHead()
             return
@@ -189,8 +261,10 @@ public final class FileSender: @unchecked Sendable {
         active?.phase = .offered(id)
         active?.size = digest.size
         let mime = UTType(filenameExtension: items[0].url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-        link.send(.fileOffer(transferId: id, name: items[0].name, size: digest.size, sha256: digest.hex, mime: mime, batch: nil))
-        onStatus?(status(name: items[0].name, bytesDone: 0, size: digest.size))
+        items[0].tracker?.offered = true  // before the write: an unknown batch_end is harmless to the receiver
+        link.send(.fileOffer(transferId: id, name: items[0].name, size: digest.size, sha256: digest.hex, mime: mime,
+                             batch: items[0].batch))
+        onStatus?(status(items[0], bytesDone: 0, size: digest.size))
     }
 
     private func accepted(id: String, offset: Int) {
@@ -209,7 +283,7 @@ public final class FileSender: @unchecked Sendable {
         active?.phase = .sending(id)
         active?.nextOffset = offset
         active?.acked = offset
-        onStatus?(status(name: items[0].name, bytesDone: offset, size: size))
+        onStatus?(status(items[0], bytesDone: offset, size: size))
         pump()
     }
 
@@ -247,7 +321,7 @@ public final class FileSender: @unchecked Sendable {
         current.inFlight -= 1
         current.acked += count
         active = current
-        onStatus?(status(name: items[0].name, bytesDone: current.acked, size: current.size))
+        onStatus?(status(items[0], bytesDone: current.acked, size: current.size))
         pump()
     }
 
@@ -261,10 +335,57 @@ public final class FileSender: @unchecked Sendable {
     private func finishHead(_ outcome: TransferOutcome) {
         closeActive()
         generation += 1
-        items.removeFirst()
-        onOutcome?(outcome)
-        onStatus?(nil)
+        let item = items.removeFirst()
+        let done = resolve(item, outcome, userCancelled: false)
+        flushEnds()  // before the last outcome, so a caller that stops after it has the batch_end on the wire
+        onStatus?(nil)  // before the outcome: an outcome handler may enqueue, and its status must win
+        report(outcome, for: item)
+        if let summary = done?.summary { onBatchSummary?(summary) }
         startHeadIfIdle()
+    }
+
+    private func report(_ outcome: TransferOutcome, for item: Item) {
+        if let batch = item.batch { onBatchFileOutcome?(outcome, batch) } else { onOutcome?(outcome) }
+    }
+
+    /// Writes the waiting `batch_end`s, in order, if a session is up.
+    /// Known difference from Kotlin: `TransferLink.send` cannot report failure, so a `batch_end` written into a link
+    /// that is dying is lost (Kotlin keeps the entry for the next session). The receiver then falls back to its
+    /// silent summary.
+    private func flushEnds() {
+        guard let link, !pendingEnds.isEmpty else { return }
+        let ends = pendingEnds
+        pendingEnds.removeAll()
+        for end in ends { link.send(end) }
+    }
+
+    /// Counts `item` as done in its batch (`outcome` nil: dropped without one). The batch's last file completes it:
+    /// queues the `batch_end` and builds the summary.
+    private func resolve(_ item: Item, _ outcome: TransferOutcome?, userCancelled: Bool) -> Completion? {
+        guard let tracker = item.tracker else { return nil }
+        tracker.resolved += 1
+        if outcome != nil { tracker.reported += 1 }
+        switch outcome {
+        case .sent?:
+            tracker.sent += 1
+        case let .failed(_, name, reason)?where !userCancelled:
+            tracker.failures.append(BatchFailure(name: name, reason: reason))
+            tracker.failedFiles.append(item.url)
+        default:
+            break
+        }
+        guard tracker.resolved >= tracker.count else { return nil }
+        if tracker.silent { return Completion(summary: nil) }
+        if tracker.offered {
+            pendingEnds.append(.batchEnd(batch: tracker.id, count: tracker.count, sent: tracker.sent, cancelled: tracker.cancelled))
+        }
+        let hasSummary = tracker.cancelled ? tracker.offered : tracker.reported > 0
+        let summary = hasSummary
+            ? BatchSummary(direction: .outgoing, batch: tracker.id, count: tracker.count, done: tracker.sent,
+                           failures: tracker.failures, cancelled: tracker.cancelled,
+                           files: tracker.cancelled ? [] : tracker.failedFiles)
+            : nil
+        return Completion(summary: summary)
     }
 
     private func endSession() {
@@ -280,7 +401,14 @@ public final class FileSender: @unchecked Sendable {
         active = nil
     }
 
-    private func status(name: String, bytesDone: Int, size: Int) -> TransferStatus {
-        TransferStatus(direction: .outgoing, name: name, bytesDone: bytesDone, size: size, queued: items.count - 1)
+    private func status(_ item: Item, bytesDone: Int, size: Int) -> TransferStatus {
+        // Files queued after the item's batch (after the item itself when unbatched).
+        let queued = items.dropFirst().filter { item.tracker == nil || $0.tracker !== item.tracker }.count
+        var batch: BatchProgress?
+        if let info = item.batch {
+            let own = min(max(bytesDone, 0), item.enqueuedSize)
+            batch = BatchProgress(index: info.index, count: info.count, bytesDone: min(info.before + own, info.size), size: info.size)
+        }
+        return TransferStatus(direction: .outgoing, name: item.name, bytesDone: bytesDone, size: size, queued: queued, batch: batch)
     }
 }

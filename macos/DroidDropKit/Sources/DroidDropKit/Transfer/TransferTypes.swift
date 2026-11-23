@@ -2,21 +2,72 @@ import Foundation
 
 public enum TransferDirection: Equatable, Sendable { case incoming, outgoing }
 
+/// Where the active file sits in its batch. `index` is 0-based; `bytesDone` never exceeds `size`.
+public struct BatchProgress: Equatable, Sendable {
+    public var index, count, bytesDone, size: Int
+
+    public init(index: Int, count: Int, bytesDone: Int, size: Int) {
+        self.index = index
+        self.count = count
+        self.bytesDone = bytesDone
+        self.size = size
+    }
+}
+
+public struct BatchFailure: Equatable, Sendable {
+    public var name: String
+    public var reason: String
+
+    public init(name: String, reason: String) {
+        self.name = name
+        self.reason = reason
+    }
+}
+
+/// How a batch ended, for its one summary notification.
+public struct BatchSummary: Equatable, Sendable {
+    public var direction: TransferDirection
+    public var batch: String
+    public var count: Int
+    public var done: Int
+    public var failures: [BatchFailure]
+    public var cancelled: Bool
+    public var silent: Bool
+    /// Receiver: the saved files. Sender: the failed files to retry (never user-cancelled ones).
+    public var files: [URL]
+
+    public init(direction: TransferDirection, batch: String, count: Int, done: Int, failures: [BatchFailure] = [],
+                cancelled: Bool = false, silent: Bool = false, files: [URL] = []) {
+        self.direction = direction
+        self.batch = batch
+        self.count = count
+        self.done = done
+        self.failures = failures
+        self.cancelled = cancelled
+        self.silent = silent
+        self.files = files
+    }
+}
+
 /// Progress of the transfer in one direction, for the status menu.
 public struct TransferStatus: Equatable, Sendable {
     public var direction: TransferDirection
     public var name: String
     public var bytesDone: Int
     public var size: Int
-    /// Files waiting behind this one (outgoing only).
+    /// Files queued after this file's batch, or after this file when unbatched (outgoing only).
     public var queued: Int
+    /// Set while the file belongs to a batch.
+    public var batch: BatchProgress?
 
-    public init(direction: TransferDirection, name: String, bytesDone: Int, size: Int, queued: Int = 0) {
+    public init(direction: TransferDirection, name: String, bytesDone: Int, size: Int, queued: Int = 0,
+                batch: BatchProgress? = nil) {
         self.direction = direction
         self.name = name
         self.bytesDone = bytesDone
         self.size = size
         self.queued = queued
+        self.batch = batch
     }
 }
 

@@ -224,4 +224,18 @@ import Testing
         h.transfers.cancelAllSending()
         try await eventually { h.snapshots.values.last?.waitingToSend == 0 }
     }
+
+    @Test func batchProgressAloneIsThrottled() {
+        func snapshot(_ done: Int, batchDone: Int) -> FileTransfers.Snapshot {
+            let batch = BatchProgress(index: 1, count: 3, bytesDone: batchDone, size: 300)
+            return FileTransfers.Snapshot(
+                incoming: TransferStatus(direction: .incoming, name: "a", bytesDone: done, size: 100, batch: batch),
+                outgoing: TransferStatus(direction: .outgoing, name: "b", bytesDone: done, size: 100, batch: batch))
+        }
+        #expect(FileTransfers.progressOnly(from: snapshot(10, batchDone: 110), to: snapshot(50, batchDone: 150)))
+        let next = FileTransfers.Snapshot(incoming: TransferStatus(
+            direction: .incoming, name: "a", bytesDone: 0, size: 100,
+            batch: BatchProgress(index: 2, count: 3, bytesDone: 200, size: 300)))
+        #expect(!FileTransfers.progressOnly(from: snapshot(10, batchDone: 110), to: next))
+    }
 }

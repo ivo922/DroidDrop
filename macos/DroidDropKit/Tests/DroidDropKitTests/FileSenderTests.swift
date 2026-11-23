@@ -19,9 +19,15 @@ final class FakeLink: TransferLink, @unchecked Sendable {
     }
     var chunkCount: Int { lock.withLock { sentChunks.count } }
     var messageCount: Int { lock.withLock { messages.count } }
+    /// How many batch_end messages were ever sent.
+    var batchEndCount: Int { lock.withLock { endsSent } }
+    private var endsSent = 0
 
     func send(_ message: Message) {
-        lock.withLock { messages.append(message) }
+        lock.withLock {
+            messages.append(message)
+            if case .batchEnd = message { endsSent += 1 }
+        }
     }
 
     func sendChunk(transferId: String, offset: UInt64, data: Data, completion: @escaping @Sendable (Bool) -> Void) {
@@ -93,6 +99,17 @@ final class OutcomeRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var recordedOutcomes: [TransferOutcome] = []
     private var recordedStatuses: [TransferStatus?] = []
+    private var recordedSummaries: [BatchSummary] = []
+    private var recordedBatchOutcomes: [TransferOutcome] = []
+    private var recordedEvents: [String] = []
+    var summaries: [BatchSummary] { lock.withLock { recordedSummaries } }
+    var batchOutcomes: [TransferOutcome] { lock.withLock { recordedBatchOutcomes } }
+    /// "outcome" / "summary" in the order they were reported.
+    var events: [String] { lock.withLock { recordedEvents } }
+    func record(summary: BatchSummary) { lock.withLock { recordedSummaries.append(summary); recordedEvents.append("summary") } }
+    func record(batchOutcome: TransferOutcome) {
+        lock.withLock { recordedBatchOutcomes.append(batchOutcome); recordedEvents.append("outcome") }
+    }
     var outcomes: [TransferOutcome] { lock.withLock { recordedOutcomes } }
     var statuses: [TransferStatus?] { lock.withLock { recordedStatuses } }
     func record(_ outcome: TransferOutcome) { lock.withLock { recordedOutcomes.append(outcome) } }
@@ -112,6 +129,8 @@ final class OutcomeRecorder: @unchecked Sendable {
         sender = FileSender(queue: queue)
         sender.onOutcome = { [recorder] in recorder.record($0) }
         sender.onStatus = { [recorder] in recorder.record(status: $0) }
+        sender.onBatchSummary = { [recorder] in recorder.record(summary: $0) }
+        sender.onBatchFileOutcome = { [recorder] outcome, _ in recorder.record(batchOutcome: outcome) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
 
@@ -253,7 +272,7 @@ final class OutcomeRecorder: @unchecked Sendable {
     @Test func rejectAndFailedResultMoveToNextFile() async throws {
         let a = try write(Data("a".utf8), name: "a.txt")
         let b = try write(Data("b".utf8), name: "b.txt")
-        queue.sync { sender.enqueue([a, b]); sender.connected(link) }
+        queue.sync { sender.enqueue([a]); sender.enqueue([b]); sender.connected(link) }
         let idA = try await offerID(link, name: "a.txt")
         queue.sync { sender.receive(.fileReject(transferId: idA, reason: "busy")) }
         let idB = try await offerID(link, name: "b.txt")
@@ -270,7 +289,7 @@ final class OutcomeRecorder: @unchecked Sendable {
     @Test func peerCancelFailsFileAndContinues() async throws {
         let a = try write(Data("a".utf8), name: "a.txt")
         let b = try write(Data("b".utf8), name: "b.txt")
-        queue.sync { sender.enqueue([a, b]); sender.connected(link) }
+        queue.sync { sender.enqueue([a]); sender.enqueue([b]); sender.connected(link) }
         let idA = try await offerID(link, name: "a.txt")
         queue.sync { sender.receive(.fileAccept(transferId: idA, offset: 0)) }
         #expect(try await link.next() == .fileDone(transferId: idA))
@@ -282,7 +301,7 @@ final class OutcomeRecorder: @unchecked Sendable {
     @Test func cancelAllSendsCancelAndEmptiesQueue() async throws {
         let urls = try ["a.txt", "b.txt", "c.txt"].map { try write(Data($0.utf8), name: $0) }
         link.autoComplete = false
-        queue.sync { sender.enqueue(urls); sender.connected(link) }
+        queue.sync { for url in urls { sender.enqueue([url]) }; sender.connected(link) }
         let id = try await offerID(link, name: "a.txt")
         queue.sync { sender.receive(.fileAccept(transferId: id, offset: 0)) }
         _ = try await link.chunks(count: 1)
@@ -309,7 +328,7 @@ final class OutcomeRecorder: @unchecked Sendable {
     @Test func missingFileFailsAndQueueContinues() async throws {
         let missing = root.appending(path: "gone.txt")
         let file = try write(Data("a".utf8), name: "a.txt")
-        queue.sync { sender.enqueue([missing, file]); sender.connected(link) }
+        queue.sync { sender.enqueue([missing]); sender.enqueue([file]); sender.connected(link) }
         _ = try await offerID(link, name: "a.txt")
         #expect(outcomes.first == .failed(.outgoing, name: "gone.txt", reason: "file changed or unreadable"))
     }
@@ -352,4 +371,310 @@ final class OutcomeRecorder: @unchecked Sendable {
         try await Task.sleep(for: .milliseconds(200))
         #expect(link2.chunkCount == 4)
     }
+
+    // MARK: - Batches
+
+    private func files(_ names: String...) throws -> [URL] {
+        try names.map { try write(Data($0.utf8), name: $0) }
+    }
+
+    /// Waits for the offer of `name`, accepts it, streams its one chunk and answers with a file_result.
+    @discardableResult
+    private func complete(_ name: String, ok: Bool = true, reason: String? = nil, on link: FakeLink? = nil,
+                          check: () -> Void = {}) async throws -> (id: String, batch: BatchInfo?) {
+        let link = link ?? self.link
+        guard case .fileOffer(let id, let offered, _, _, _, let batch) = try await link.next() else {
+            throw UnexpectedEvent(description: "no offer")
+        }
+        #expect(offered == name)
+        check()
+        queue.sync { sender.receive(.fileAccept(transferId: id, offset: 0)) }
+        _ = try await link.chunks(count: 1)
+        #expect(try await link.next() == .fileDone(transferId: id))
+        queue.sync { sender.receive(.fileResult(transferId: id, ok: ok, reason: reason)) }
+        return (id, batch)
+    }
+
+    private func nextOffer(_ link: FakeLink, name: String) async throws -> (id: String, batch: BatchInfo?) {
+        guard case .fileOffer(let id, let offered, _, _, _, let batch) = try await link.next() else {
+            throw UnexpectedEvent(description: "no offer")
+        }
+        #expect(offered == name)
+        return (id, batch)
+    }
+
+    @Test func twoFilesFormABatch() async throws {
+        let urls = [try write(Data("hello world".utf8), name: "a.txt"), try write(Data("12345".utf8), name: "b.txt")]
+        queue.sync { sender.enqueue(urls); sender.connected(link) }
+        let first = try await complete("a.txt")
+        let id = try #require(first.batch).id
+        #expect(first.batch == BatchInfo(id: id, index: 0, count: 2, size: 16, before: 0))
+        let second = try await complete("b.txt")
+        #expect(second.batch == BatchInfo(id: id, index: 1, count: 2, size: 16, before: 11))
+        #expect(try await link.next() == .batchEnd(batch: id, count: 2, sent: 2, cancelled: false))
+        #expect(recorder.summaries == [BatchSummary(direction: .outgoing, batch: id, count: 2, done: 2)])
+        #expect(queue.sync { sender.queuedCount } == 0)
+    }
+
+    @Test func batchIdComesFromMakeID() async throws {
+        let sender = FileSender(queue: queue, makeID: { "11111111-1111-4111-8111-111111111111" })
+        let urls = try files("a.txt", "b.txt")
+        queue.sync { sender.enqueue(urls); sender.connected(link) }
+        guard case .fileOffer(_, _, _, _, _, let batch) = try await link.next() else { Issue.record("no offer"); return }
+        #expect(batch?.id == "11111111-1111-4111-8111-111111111111")
+    }
+
+    @Test func singleFileIsUnbatched() async throws {
+        let urls = try files("a.txt")
+        queue.sync { sender.enqueue(urls); sender.connected(link) }
+        #expect(try await complete("a.txt").batch == nil)
+        #expect(outcomes == [.sent(name: "a.txt")])
+        let next = try files("next.txt")
+        queue.sync { sender.enqueue(next) }
+        _ = try await offerID(link, name: "next.txt")  // a batch_end in between would fail the cast
+        #expect(recorder.summaries.isEmpty)
+        #expect(recorder.batchOutcomes.isEmpty)
+    }
+
+    @Test func folderLeftOutOfBatch() async throws {
+        let folder = root.appending(path: "Stuff")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let urls = try files("a.txt", "b.txt")
+        queue.sync { sender.enqueue([folder] + urls); sender.connected(link) }
+        #expect(outcomes == [.failed(.outgoing, name: "Stuff", reason: "folders are not supported")])
+        #expect(recorder.batchOutcomes.isEmpty)
+        let first = try await complete("a.txt")
+        #expect(first.batch?.count == 2)
+    }
+
+    @Test func statusCountsThroughBatch() async throws {
+        let urls = [try write(Data("hello world".utf8), name: "a.txt"), try write(Data("12345".utf8), name: "b.txt")]
+        queue.sync { sender.enqueue(urls); sender.connected(link) }
+        try await complete("a.txt")
+        let offer = try await nextOffer(link, name: "b.txt")
+        #expect(recorder.statuses.last??.batch == BatchProgress(index: 1, count: 2, bytesDone: 11, size: 16))
+        queue.sync { sender.receive(.fileAccept(transferId: offer.id, offset: 0)) }
+        _ = try await link.chunks(count: 1)
+        #expect(try await link.next() == .fileDone(transferId: offer.id))
+        queue.sync {}
+        #expect(recorder.statuses.last??.batch == BatchProgress(index: 1, count: 2, bytesDone: 16, size: 16))
+    }
+
+    @Test func progressClampedWhenFileGrew() async throws {
+        let a = try write(Data("hello world".utf8), name: "a.txt")
+        let b = try write(Data("12345".utf8), name: "b.txt")
+        queue.sync { sender.enqueue([a, b]) }
+        try Data("hello world123456789".utf8).write(to: a)  // 20 bytes now, 11 at enqueue
+        queue.sync { sender.connected(link) }
+        guard case .fileOffer(let id, "a.txt", 20, _, _, let batch) = try await link.next() else {
+            Issue.record("no offer"); return
+        }
+        #expect(batch == BatchInfo(id: try #require(batch).id, index: 0, count: 2, size: 16, before: 0))
+        queue.sync { sender.receive(.fileAccept(transferId: id, offset: 0)) }
+        _ = try await link.chunks(count: 1)
+        #expect(try await link.next() == .fileDone(transferId: id))
+        queue.sync {}
+        let progress = try #require(recorder.statuses.last??.batch)
+        #expect(progress == BatchProgress(index: 0, count: 2, bytesDone: 11, size: 16))
+        #expect(recorder.statuses.compactMap { $0?.batch }.allSatisfy { $0.bytesDone <= $0.size })
+    }
+
+    @Test func failureListedInSummary() async throws {
+        let urls = try files("a.txt", "b.txt")
+        queue.sync { sender.enqueue(urls); sender.connected(link) }
+        let id = try #require(try await complete("a.txt").batch).id
+        try await complete("b.txt", ok: false, reason: "hash_mismatch")
+        #expect(try await link.next() == .batchEnd(batch: id, count: 2, sent: 1, cancelled: false))
+        #expect(recorder.summaries == [BatchSummary(direction: .outgoing, batch: id, count: 2, done: 1,
+                                                    failures: [BatchFailure(name: "b.txt", reason: "hash_mismatch")],
+                                                    files: [urls[1]])])
+    }
+
+    @Test func reofferKeepsBatch() async throws {
+        let urls = try files("a.txt", "b.txt")
+        queue.sync { sender.enqueue(urls); sender.connected(link) }
+        try await complete("a.txt")
+        let offer1 = try await nextOffer(link, name: "b.txt")
+        queue.sync { sender.disconnected() }
+        let link2 = FakeLink()
+        queue.sync { sender.connected(link2) }
+        let offer2 = try await nextOffer(link2, name: "b.txt")
+        #expect(offer1.id != offer2.id)
+        #expect(offer1.batch == offer2.batch)
+        #expect(offer2.batch?.index == 1)
+        #expect(offer2.batch?.before == 5)
+    }
+
+    @Test func batchEndWaitsForNextSession() async throws {
+        // A batch ended while no session is up (cancelled offline); another batch is queued meanwhile.
+        let urls = try files("a.txt", "b.txt")
+        queue.sync { sender.enqueue(urls); sender.connected(link) }
+        let id = try #require(try await nextOffer(link, name: "a.txt").batch).id
+        queue.sync { sender.disconnected(); sender.cancelAll() }
+        let more = try files("c.txt", "d.txt")
+        queue.sync { sender.enqueue(more) }
+        let link2 = FakeLink()
+        queue.sync { sender.connected(link2) }
+        #expect(try await link2.next() == .batchEnd(batch: id, count: 2, sent: 0, cancelled: true))
+        _ = try await nextOffer(link2, name: "c.txt")
+    }
+
+    @Test func cancelOfflineQueuesBatchEnd() async throws {
+        let urls = try files("a.txt", "b.txt")
+        queue.sync { sender.enqueue(urls); sender.connected(link) }
+        let id = try #require(try await complete("a.txt").batch).id
+        _ = try await nextOffer(link, name: "b.txt")
+        queue.sync { sender.disconnected() }
+        queue.sync { sender.cancelAll() }
+        #expect(recorder.summaries == [BatchSummary(direction: .outgoing, batch: id, count: 2, done: 1, cancelled: true)])
+        let link2 = FakeLink()
+        queue.sync { sender.connected(link2) }
+        #expect(try await link2.next() == .batchEnd(batch: id, count: 2, sent: 1, cancelled: true))
+    }
+
+    @Test func cancelQueuedOnlyBatchIsSilent() async throws {
+        let urls = try files("a.txt", "b.txt")
+        queue.sync { sender.enqueue(urls); sender.cancelAll() }
+        #expect(recorder.summaries.isEmpty)
+        let next = try files("c.txt")
+        queue.sync { sender.connected(link); sender.enqueue(next) }
+        _ = try await offerID(link, name: "c.txt")  // no batch_end first
+    }
+
+    @Test func silentCancelDropsEverything() async throws {
+        let urls = try files("a.txt", "b.txt")
+        queue.sync { sender.enqueue(urls); sender.connected(link) }
+        let id = try #require(try await complete("a.txt").batch).id
+        let offerB = try await nextOffer(link, name: "b.txt")
+        queue.sync { sender.cancelAll(silent: true) }
+        #expect(try await link.next() == .fileCancel(transferId: offerB.id))
+        #expect(outcomes.isEmpty)
+        #expect(recorder.batchOutcomes == [.sent(name: "a.txt"), .failed(.outgoing, name: "b.txt", reason: "cancelled")])
+        #expect(recorder.summaries.isEmpty)
+        let next = try files("c.txt")
+        queue.sync { sender.enqueue(next) }
+        _ = try await offerID(link, name: "c.txt")  // no batch_end first
+    }
+
+    @Test func silentCancelDropsPendingEnd() async throws {
+        let urls = try files("a.txt", "b.txt")
+        queue.sync { sender.enqueue(urls); sender.connected(link) }
+        try await complete("a.txt")
+        let offerB = try await nextOffer(link, name: "b.txt")
+        queue.sync { sender.disconnected(); sender.cancelAll() }  // pending cancelled end
+        queue.sync { sender.cancelAll(silent: true) }
+        let next = try files("c.txt")
+        let link2 = FakeLink()
+        queue.sync { sender.enqueue(next); sender.connected(link2) }
+        _ = try await offerID(link2, name: "c.txt")  // no batch_end first
+    }
+
+    @Test func outcomesTaggedAsBatchFiles() async throws {
+        let urls = try files("a.txt", "b.txt")
+        queue.sync { sender.enqueue(urls); sender.connected(link) }
+        try await complete("a.txt")
+        try await complete("b.txt")
+        #expect(outcomes.isEmpty)
+        #expect(recorder.batchOutcomes == [.sent(name: "a.txt"), .sent(name: "b.txt")])
+    }
+
+    @Test func queuedCountsOnlyFilesAfterTheActiveBatch() async throws {
+        let batch = try files("a.txt", "b.txt")
+        let single = try files("c.txt")
+        queue.sync { sender.enqueue(batch); sender.enqueue(single); sender.connected(link) }
+        try await complete("a.txt") { #expect(recorder.statuses.last??.queued == 1) }
+        try await complete("b.txt") { #expect(recorder.statuses.last??.queued == 1) }
+        guard case .batchEnd = try await link.next() else { Issue.record("no batch_end"); return }
+        try await complete("c.txt") { #expect(recorder.statuses.last??.queued == 0) }
+    }
+
+    @Test func offlineCancelAfterOfferedFileGivesSummaryAndEnd() async throws {
+        let urls = try files("a.txt", "b.txt")
+        queue.sync { sender.enqueue(urls); sender.connected(link) }
+        let id = try #require(try await nextOffer(link, name: "a.txt").batch).id
+        queue.sync { sender.disconnected() }  // dropped mid-file: offered, but no outcome
+        queue.sync { sender.cancelAll() }
+        #expect(recorder.summaries == [BatchSummary(direction: .outgoing, batch: id, count: 2, done: 0, cancelled: true)])
+        let link2 = FakeLink()
+        queue.sync { sender.connected(link2) }
+        #expect(try await link2.next() == .batchEnd(batch: id, count: 2, sent: 0, cancelled: true))
+    }
+
+    @Test func cancelWhileHashingFirstFileGivesNoSummaryOrEnd() async throws {
+        let hashes = HashGate()
+        let sender = FileSender(queue: queue, hash: { url in try hashes.run(url) })
+        sender.onOutcome = { [recorder] in recorder.record($0) }
+        sender.onBatchFileOutcome = { [recorder] outcome, _ in recorder.record(batchOutcome: outcome) }
+        sender.onBatchSummary = { [recorder] in recorder.record(summary: $0) }
+        let urls = try files("a.txt", "b.txt")
+        queue.sync { sender.enqueue(urls); sender.connected(link) }
+        try await hashes.waitForStart()
+        queue.sync { sender.cancelAll() }
+        #expect(recorder.batchOutcomes == [.failed(.outgoing, name: "a.txt", reason: "cancelled")])
+        #expect(outcomes.isEmpty)
+        hashes.release()
+        let next = try files("c.txt")
+        queue.sync { sender.enqueue(next) }
+        hashes.release()
+        _ = try await offerID(link, name: "c.txt")  // no batch_end first
+        #expect(recorder.summaries.isEmpty)
+    }
+
+    @Test func onlineCancelEndsBatchCancelled() async throws {
+        let urls = try files("a.txt", "b.txt")
+        queue.sync { sender.enqueue(urls); sender.connected(link) }
+        let id = try #require(try await complete("a.txt").batch).id
+        let offerB = try await nextOffer(link, name: "b.txt")
+        queue.sync { sender.cancelAll() }
+        #expect(try await link.next() == .fileCancel(transferId: offerB.id))
+        #expect(try await link.next() == .batchEnd(batch: id, count: 2, sent: 1, cancelled: true))
+        #expect(recorder.summaries == [BatchSummary(direction: .outgoing, batch: id, count: 2, done: 1, cancelled: true)])
+    }
+
+    @Test func userCancelledFileIsNotRetried() async throws {
+        let urls = try files("a.txt", "b.txt", "c.txt")
+        queue.sync { sender.enqueue(urls); sender.connected(link) }
+        try await complete("a.txt", ok: false, reason: "hash_mismatch")
+        _ = try await nextOffer(link, name: "b.txt")
+        queue.sync { sender.cancelAll() }
+        let summary = try #require(recorder.summaries.first)
+        #expect(summary.cancelled)
+        #expect(summary.failures == [BatchFailure(name: "a.txt", reason: "hash_mismatch")])
+        #expect(summary.files.isEmpty)
+    }
+
+    @Test func batchOfUnreadableFilesGivesSummaryButNoBatchEnd() async throws {
+        let missing = [root.appending(path: "gone1.txt"), root.appending(path: "gone2.txt")]
+        queue.sync { sender.enqueue(missing); sender.connected(link) }
+        let deadline = Date().addingTimeInterval(5)
+        while recorder.summaries.isEmpty, Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        let summary = try #require(recorder.summaries.first)
+        #expect(recorder.summaries.count == 1)
+        #expect(summary.count == 2 && summary.done == 0 && !summary.cancelled)
+        #expect(summary.failures.map(\.name) == ["gone1.txt", "gone2.txt"])
+        #expect(link.batchEndCount == 0)
+        #expect(link.messageCount == 0)
+    }
+
+    @Test func batchEndIsWrittenBeforeLastOutcome() async throws {
+        let urls = try files("a.txt", "b.txt")
+        let ends = EndProbe()
+        sender.onBatchFileOutcome = { [recorder] outcome, _ in
+            recorder.record(batchOutcome: outcome)
+            ends.sawOutcome(endsSent: self.link.batchEndCount)
+        }
+        queue.sync { sender.enqueue(urls); sender.connected(link) }
+        try await complete("a.txt")
+        try await complete("b.txt")
+        #expect(ends.endsAtOutcome == [0, 1])
+        #expect(recorder.events == ["outcome", "outcome", "summary"])
+        #expect(outcomes.isEmpty)
+    }
+}
+
+final class EndProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var counts: [Int] = []
+    var endsAtOutcome: [Int] { lock.withLock { counts } }
+    func sawOutcome(endsSent: Int) { lock.withLock { counts.append(endsSent) } }
 }

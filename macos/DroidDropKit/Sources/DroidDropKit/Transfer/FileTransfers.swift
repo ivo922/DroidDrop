@@ -195,12 +195,14 @@ public final class FileTransfers: @unchecked Sendable {
         onSnapshot?(current)
     }
 
-    /// Same transfers, files and queue lengths; only `bytesDone` moved.
-    private static func progressOnly(from old: Snapshot, to new: Snapshot) -> Bool {
+    /// Same transfers, files and queue lengths; only `bytesDone` (file or batch) moved.
+    static func progressOnly(from old: Snapshot, to new: Snapshot) -> Bool {
         func shape(_ snapshot: Snapshot) -> Snapshot {
             var shaped = snapshot
             shaped.incoming?.bytesDone = 0
             shaped.outgoing?.bytesDone = 0
+            shaped.incoming?.batch?.bytesDone = 0
+            shaped.outgoing?.batch?.bytesDone = 0
             return shaped
         }
         return shape(old) == shape(new)
