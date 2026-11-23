@@ -62,7 +62,7 @@ class FileSender(
         /** The file's size at enqueue time: its share of the batch progress is clamped to it. */
         val enqueuedSize: Long = 0,
     ) {
-        /** Computed once, kept across re-offers (R4). Only [run] touches it. */
+        /** Computed once, kept across re-offers (plan 04 R4). Only [run] touches it. */
         @Volatile var digest: Digest? = null
 
         /** Set by [cancelAll] while [run] owns this item; [run] then sends `file_cancel` and reports it. */
@@ -145,7 +145,7 @@ class FileSender(
     }
 
     /**
-     * file_cancel for the active file (Failed "cancelled"), then releases and drops the rest (R10). Any thread.
+     * file_cancel for the active file (Failed "cancelled"), then releases and drops the rest (plan 04 R10). Any thread.
      * A batch that had a file offered ends with a cancelled summary and `batch_end`. With [silent] (unpair) nothing
      * is reported and pending `batch_end`s are dropped.
      */
@@ -175,7 +175,7 @@ class FileSender(
     /**
      * Sends queued files over one established session until cancelled; waits for more when the queue is empty.
      * [replies] carries this session's file_accept / file_reject / file_result / file_cancel.
-     * When cancelled (session ended), the unfinished head stays queued and unreleased (R4).
+     * When cancelled (session ended), the unfinished head stays queued and unreleased (plan 04 R4).
      *
      * One run at a time: a run started while an earlier one is still winding down after its cancellation (for
      * example, blocked in a socket write or hashing) suspends, cancellably, until that one has finished.

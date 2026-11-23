@@ -98,4 +98,13 @@ class TransferTextTest {
         assertEquals("Sent 13 of 20 files", title)
         assertEquals("7 failed:\nf1.jpg (r1)\nf2.jpg (r2)\nf3.jpg (r3)\nf4.jpg (r4)\nf5.jpg (r5)\nand 2 more", body)
     }
+
+    @Test
+    fun progressPermille() {
+        val batch = BatchProgress(index = 0, count = 3, bytesDone = 250, size = 1000)
+        assertEquals(250, TransferText.progressPermille(TransferStatus(Direction.OUTGOING, "a", 9, 10, batch = batch)))
+        assertEquals(900, TransferText.progressPermille(TransferStatus(Direction.OUTGOING, "a", 9, 10)))
+        assertEquals(0, TransferText.progressPermille(TransferStatus(Direction.OUTGOING, "a", 0, 0)))
+        assertEquals(0, TransferText.progressPermille(TransferStatus(Direction.OUTGOING, "a", 5, 10, batch = batch.copy(size = 0))))
+    }
 }

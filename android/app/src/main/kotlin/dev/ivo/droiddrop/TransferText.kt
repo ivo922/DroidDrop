@@ -7,6 +7,15 @@ import dev.ivo.droiddrop.core.transfer.TransferStatus
 
 /** Notification wording for transfers. Pure, so it can be unit tested. */
 object TransferText {
+    const val PROGRESS_MAX = 1000
+
+    /** Progress in thousandths of the batch when the file belongs to one, else of the file. 0 when the size is 0. */
+    fun progressPermille(status: TransferStatus): Int {
+        val done = status.batch?.bytesDone ?: status.bytesDone
+        val size = status.batch?.size ?: status.size
+        return if (size > 0) (done * PROGRESS_MAX / size).toInt() else 0
+    }
+
     fun progress(status: TransferStatus): String {
         val verb = if (status.direction == Direction.INCOMING) "Receiving" else "Sending"
         val percent = if (status.size > 0) status.bytesDone * 100 / status.size else 0

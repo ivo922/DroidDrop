@@ -148,6 +148,11 @@ class ConnectionService : Service() {
                     throw e
                 } catch (e: Exception) {
                     Log.e(TAG, "could not post the batch summary", e)
+                    // Do not strand the failed files: nothing will offer Retry for them.
+                    runCatching {
+                        summary.retry.forEach(OutgoingFile::release)
+                        Transfers.retry.clear()
+                    }
                 }
             }
         }
@@ -222,6 +227,19 @@ class ConnectionService : Service() {
         }
     }
 
+    /** A completed pairing starts clean: drops what belonged to the previous pairing. Never throws. */
+    private fun resetForNewPairing(previous: String?, next: String) {
+        try {
+            val resets = PairingReset.forNewPairing(previous, next)
+            if (PairingReset.Reset.INCOMING_BATCHES in resets) Transfers.incomingBatches.clear()
+            if (PairingReset.Reset.SEND_QUEUE in resets) Transfers.sender.cancelAll(silent = true)
+            if (PairingReset.Reset.RETRY in resets) Transfers.retry.clear()
+            if (PairingReset.Reset.SENT_SUMMARY in resets) TransferNotifications.cancelSentSummary(this)
+        } catch (e: Exception) {
+            Log.w(TAG, "could not reset transfers for the new pairing", e)
+        }
+    }
+
     /** Pairs and then keeps that session as the live connection. Returns false if pairing failed. */
     private suspend fun pair(client: DroidDropClient, uri: PairUri): Boolean {
         ConnectionStatus.state.value = ConnectionState.Pairing(uri.name)
@@ -229,6 +247,7 @@ class ConnectionService : Service() {
         val secret = Base64Url.decode32(uri.secret)!!
         var lastError: Exception? = null
         var sawPinMismatch = false
+        val previousFingerprint = store.load()?.fingerprint
         for (host in uri.hosts) {
             var paired = false
             val transfers = newTransferSession()
@@ -236,6 +255,7 @@ class ConnectionService : Service() {
                 client.run(host, uri.port, fingerprint, secret, listener(
                     transfers,
                     onPaired = { name ->
+                        resetForNewPairing(previousFingerprint, uri.fingerprint)
                         store.save(PairedMac(name, uri.fingerprint, uri.hosts, uri.port))
                         store.rememberAddress(host, uri.port)
                         paired = true
@@ -246,6 +266,7 @@ class ConnectionService : Service() {
             } catch (e: Exception) {
                 if (ReconnectPolicy.alreadyPaired(e)) {
                     // Keep the QR's fresh addresses: they are why the user scanned it again.
+                    resetForNewPairing(previousFingerprint, uri.fingerprint)
                     store.save(PairedMac(uri.name, uri.fingerprint, uri.hosts, uri.port))
                     store.rememberAddress(host, uri.port)
                     paired = true

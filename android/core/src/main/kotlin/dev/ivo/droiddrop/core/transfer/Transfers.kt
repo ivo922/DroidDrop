@@ -15,7 +15,7 @@ data class TransferStatus(
     val name: String,
     val bytesDone: Long,
     val size: Long,
-    /** Files waiting behind this one (outgoing only). */
+    /** Files queued after this file's batch, or after this file when unbatched (outgoing only). */
     val queued: Int = 0,
     /** Set while the file belongs to a batch. */
     val batch: BatchProgress? = null,
