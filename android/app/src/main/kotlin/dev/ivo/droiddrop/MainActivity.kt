@@ -18,7 +18,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.core.net.toUri
@@ -41,6 +40,8 @@ import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private val scope = MainScope()
+    /** The received list (View all) is open. Activity-level so a summary tap can open it (R9). */
+    private var showAll by mutableStateOf(false)
     private var scanAfterLocalNetworkGrant = false
     private var permissionRequestOpen = false
     private lateinit var store: PairingStore
@@ -80,6 +81,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        showAll = savedInstanceState?.getBoolean(STATE_SHOW_ALL) == true
+        if (savedInstanceState == null && intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY == 0) {
+            openReceivedIfAsked(intent)
+        }
         store = PairingStore(this)
         requestMissingPermissions()
 
@@ -99,7 +104,6 @@ class MainActivity : ComponentActivity() {
                 }
                 val paired = remember(state) { store.load() != null }
                 val received by receivedFiles.list.snapshot.collectAsStateWithLifecycle()
-                var showAll by rememberSaveable { mutableStateOf(false) }
                 var receivedView by remember { mutableStateOf(receivedViewStore.load()) }
                 var holdClips by remember { mutableStateOf(clipHoldSetting.load()) }
                 // Keeps the main screen's scroll position while View all is open.
@@ -224,9 +228,31 @@ class MainActivity : ComponentActivity() {
         OutgoingClip.send(this, text, automatic = false, sensitive = sensitive)
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(STATE_SHOW_ALL, showAll)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        openReceivedIfAsked(intent)
+    }
+
+    private fun openReceivedIfAsked(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_SHOW_RECEIVED, false) == true) {
+            showAll = true
+            intent.removeExtra(EXTRA_SHOW_RECEIVED) // a recreation must not reopen it
+        }
+    }
+
     private fun unpair() {
         ConnectionService.stop(this)
-        Transfers.sender.cancelAll() // the next pairing, maybe with another Mac, must not get this queue
+        // The next pairing, maybe with another Mac, must not get this queue, these retries or that half batch (R10).
+        Transfers.sender.cancelAll(silent = true)
+        Transfers.retry.clear()
+        TransferNotifications.cancelSentSummary(this)
+        Transfers.incomingBatches.clear()
         store.clear()
         ConnectionStatus.state.value = ConnectionState.Unpaired
         AndroidIdentity.enqueueDelete()
@@ -252,5 +278,11 @@ class MainActivity : ComponentActivity() {
 
     private fun requestBatteryExemption() {
         startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, "package:$packageName".toUri()))
+    }
+
+    companion object {
+        /** Set by the receiver summary's tap: open the received list (R9). */
+        const val EXTRA_SHOW_RECEIVED = "show_received"
+        private const val STATE_SHOW_ALL = "showAll"
     }
 }

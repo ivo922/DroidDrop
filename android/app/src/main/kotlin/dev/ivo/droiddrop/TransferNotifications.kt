@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.core.app.NotificationCompat
+import dev.ivo.droiddrop.core.transfer.BatchSummary
 import dev.ivo.droiddrop.core.transfer.Direction
 import dev.ivo.droiddrop.core.transfer.TransferOutcome
 import dev.ivo.droiddrop.core.transfer.TransferStatus
@@ -19,6 +20,8 @@ object TransferNotifications {
     private const val OUTGOING_ID = 3
     private const val RECEIVED_ID = 4 // replaced by the next success (R12)
     private const val SENT_ID = 5
+    private const val SENT_SUMMARY_ID = 6 // R6
+    private const val RECEIVED_SUMMARY_ID = 7
     private const val FIRST_FAILURE_ID = 100
     private const val PROGRESS_MAX = 1000
 
@@ -66,6 +69,49 @@ object TransferNotifications {
         }
         manager(context).notify(id, builder.build())
     }
+
+    /** One alert for a whole batch, in its own slot (R6). */
+    fun showSummary(context: Context, summary: BatchSummary, peerName: String, withRetry: Boolean = summary.retry.isNotEmpty()) {
+        val (title, body) = TransferText.summary(summary, peerName)
+        val outgoing = summary.direction == Direction.OUTGOING
+        val builder = base(context, if (outgoing) android.R.drawable.stat_sys_upload_done else android.R.drawable.stat_sys_download_done)
+            .setContentTitle(title)
+            .setContentText(body.lineSequence().first())
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setAutoCancel(true)
+            .setSilent(summary.silent) // R8
+        if (outgoing) {
+            if (withRetry) {
+                // Only the action retries; a tap or a swipe releases the files.
+                val dismiss = retryIntent(context, RetryReceiver.DISMISS)
+                builder.setContentIntent(dismiss)
+                    .addAction(0, "Retry", retryIntent(context, RetryReceiver.RETRY))
+                    .setDeleteIntent(dismiss)
+            }
+        } else {
+            val open = Intent(context, MainActivity::class.java)
+                .putExtra(MainActivity.EXTRA_SHOW_RECEIVED, true)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            builder.setContentIntent(PendingIntent.getActivity(context, RECEIVED_SUMMARY_ID, open, PendingIntent.FLAG_IMMUTABLE))
+        }
+        manager(context).notify(if (outgoing) SENT_SUMMARY_ID else RECEIVED_SUMMARY_ID, builder.build())
+    }
+
+    /** False when the user blocked the transfers channel: nothing posted there is seen. */
+    fun channelEnabled(context: Context): Boolean =
+        manager(context).getNotificationChannel(CHANNEL)?.importance != NotificationManager.IMPORTANCE_NONE
+
+    /** Removes the sender summary, for example a stale Retry after a process start. */
+    fun cancelSentSummary(context: Context) = manager(context).cancel(SENT_SUMMARY_ID)
+
+    /** Explicit broadcast to [RetryReceiver]; the action tells the three entry points apart. */
+    private fun retryIntent(context: Context, action: String): PendingIntent =
+        PendingIntent.getBroadcast(
+            context,
+            0,
+            Intent(context, RetryReceiver::class.java).setAction(action),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
 
     private fun showProgress(context: Context, id: Int, status: TransferStatus?) {
         if (status == null) return manager(context).cancel(id)

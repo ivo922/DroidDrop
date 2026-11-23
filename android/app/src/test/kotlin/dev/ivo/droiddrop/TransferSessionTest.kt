@@ -1,11 +1,14 @@
 package dev.ivo.droiddrop
 
+import dev.ivo.droiddrop.core.protocol.BatchInfo
 import dev.ivo.droiddrop.core.protocol.Frame
 import dev.ivo.droiddrop.core.protocol.Message
 import dev.ivo.droiddrop.core.session.MessageSender
+import dev.ivo.droiddrop.core.transfer.BatchSummary
 import dev.ivo.droiddrop.core.transfer.DirectoryDestination
 import dev.ivo.droiddrop.core.transfer.FileReceiver
 import dev.ivo.droiddrop.core.transfer.FileSender
+import dev.ivo.droiddrop.core.transfer.IncomingBatches
 import dev.ivo.droiddrop.core.transfer.OutgoingFile
 import dev.ivo.droiddrop.core.transfer.PartialStore
 import dev.ivo.droiddrop.core.transfer.TransferOutcome
@@ -55,7 +58,11 @@ class TransferSessionTest {
     private lateinit var partials: PartialStore
     private lateinit var session: TransferSession
 
+    private val summaries = CopyOnWriteArrayList<BatchSummary>()
+    private val incomingBatches = IncomingBatches()
     private val sendFailures = LinkedBlockingQueue<Throwable>()
+
+    private var onSummary: (BatchSummary) -> Unit = { summaries += it }
 
     private fun newSession(sender: FileSender = FileSender()): TransferSession {
         partials = PartialStore(File(dir, "partials"))
@@ -65,6 +72,8 @@ class TransferSessionTest {
             sender,
             { incoming += it },
             { outcomes += it },
+            incomingBatches,
+            { onSummary(it) },
             { sendFailures += it },
         ).also { session = it }
     }
@@ -128,5 +137,72 @@ class TransferSessionTest {
 
         val failure = sendFailures.poll(5, TimeUnit.SECONDS)
         assertTrue(failure is IllegalStateException, "got $failure")
+    }
+
+    private fun batchOffer(transferId: String, name: String, batchId: String, index: Long, bytes: ByteArray) =
+        Message.FileOffer(transferId, name, bytes.size.toLong(), sha(bytes), "text/plain", BatchInfo(batchId, index, 2, 10, index * 5))
+
+    private fun receiveBatchFile(transferId: String, name: String, batchId: String, index: Long) {
+        val bytes = "hello".toByteArray()
+        session.handle(batchOffer(transferId, name, batchId, index, bytes))
+        session.chunk(Frame.Chunk(transferId, 0, bytes))
+        session.handle(Message.FileDone(transferId))
+    }
+
+    @Test
+    fun batchOutcomesRecorded() {
+        newSession().connected(FakeLink())
+        receiveBatchFile(id, "a.txt", "batch-1", 0)
+        // Still delivered to the received list, tagged with its batch.
+        assertEquals(1, outcomes.size)
+        assertEquals("batch-1", outcomes.single().batch?.id)
+
+        session.handle(Message.BatchEnd("batch-1", 2, 1))
+        val summary = summaries.single()
+        assertEquals(listOf(File(File(dir, "out"), "a.txt").absolutePath), summary.locations)
+    }
+
+    @Test
+    fun batchEndRoutedToIncomingBatches() {
+        newSession().connected(FakeLink())
+        receiveBatchFile(id, "a.txt", "batch-1", 0)
+        receiveBatchFile("11111111-2222-3333-4444-555555555556", "b.txt", "batch-1", 1)
+
+        assertTrue(session.handle(Message.BatchEnd("batch-1", 2, 2)))
+        assertEquals(1, summaries.size)
+        assertEquals(2, summaries.single().done)
+        assertFalse(summaries.single().silent)
+        // An unknown batch is ignored.
+        assertTrue(session.handle(Message.BatchEnd("other", 2, 2)))
+        assertEquals(1, summaries.size)
+    }
+
+    @Test
+    fun offerFallbackSummaryReported() {
+        newSession().connected(FakeLink())
+        receiveBatchFile(id, "a.txt", "batch-1", 0)
+        assertTrue(summaries.isEmpty())
+
+        val bytes = "x".toByteArray()
+        session.handle(Message.FileOffer("11111111-2222-3333-4444-555555555556", "c.txt", 1, sha(bytes), "text/plain"))
+
+        val summary = summaries.single()
+        assertEquals("batch-1", summary.batch)
+        assertEquals(1, summary.done)
+        assertTrue(summary.silent)
+    }
+
+    @Test
+    fun throwingSummaryDoesNotBlockOfferReply() {
+        onSummary = { throw IllegalStateException("notification failed") }
+        val link = FakeLink()
+        newSession().connected(link)
+        receiveBatchFile(id, "a.txt", "batch-1", 0)
+
+        val other = "11111111-2222-3333-4444-555555555556"
+        val bytes = "x".toByteArray()
+        assertTrue(session.handle(Message.FileOffer(other, "c.txt", 1, sha(bytes), "text/plain")))
+
+        assertEquals(Message.FileAccept(other, 0), link.messages.last())
     }
 }

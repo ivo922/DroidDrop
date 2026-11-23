@@ -15,6 +15,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
+import androidx.core.app.NotificationManagerCompat
 import dev.ivo.droiddrop.core.clipboard.ClipRules
 import dev.ivo.droiddrop.core.pairing.Base64Url
 import dev.ivo.droiddrop.core.pairing.PairUri
@@ -25,6 +26,7 @@ import dev.ivo.droiddrop.core.session.MessageSender
 import dev.ivo.droiddrop.core.session.SessionListener
 import dev.ivo.droiddrop.core.tls.DeviceIdentity
 import dev.ivo.droiddrop.core.transfer.FileReceiver
+import dev.ivo.droiddrop.core.transfer.OutgoingFile
 import dev.ivo.droiddrop.core.transfer.PartialStore
 import java.io.File
 import kotlinx.coroutines.CancellationException
@@ -98,6 +100,8 @@ class ConnectionService : Service() {
         partials = PartialStore(File(cacheDir, "partials"))
         downloads = DownloadsDestination(this)
         TransferNotifications.createChannel(this)
+        // A Retry from a previous process has nothing behind it. A restart in this process keeps its files.
+        if (Transfers.retry.isEmpty()) TransferNotifications.cancelSentSummary(this)
         scope.launch(Dispatchers.IO) { runCatching { partials.prune() } }
         scope.launch(Dispatchers.IO) { runCatching { pruneOutgoingSpool() } }
         getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(networkCallback)
@@ -118,10 +122,34 @@ class ConnectionService : Service() {
             }
         }
         scope.launch {
-            Transfers.received.collect { TransferNotifications.showOutcome(this@ConnectionService, it, macName()) }
+            // Batch files are reported by their summary (R3); the list still refreshes from Transfers.received.
+            Transfers.received.collect { if (it.batch == null) TransferNotifications.showOutcome(this@ConnectionService, it, macName()) }
         }
         scope.launch {
-            Transfers.sender.outcomes.collect { TransferNotifications.showOutcome(this@ConnectionService, it, macName()) }
+            Transfers.sender.outcomes.collect { if (it.batch == null) TransferNotifications.showOutcome(this@ConnectionService, it, macName()) }
+        }
+        scope.launch {
+            Transfers.sender.summaries.collect { summary ->
+                try {
+                    // Nobody could tap Retry (or there is nowhere to retry to): release the failed files now.
+                    val keep = RetryPolicy.keep(
+                        notificationsEnabled = NotificationManagerCompat.from(this@ConnectionService).areNotificationsEnabled(),
+                        channelEnabled = TransferNotifications.channelEnabled(this@ConnectionService),
+                        paired = store.load() != null,
+                    )
+                    if (keep) {
+                        Transfers.retry.replace(summary.retry)
+                    } else {
+                        Transfers.retry.clear()
+                        summary.retry.forEach(OutgoingFile::release)
+                    }
+                    TransferNotifications.showSummary(this@ConnectionService, summary, macName(), withRetry = keep && summary.retry.isNotEmpty())
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e(TAG, "could not post the batch summary", e)
+                }
+            }
         }
     }
 
@@ -309,6 +337,8 @@ class ConnectionService : Service() {
         Transfers.sender,
         { Transfers.incoming.value = it },
         { Transfers.received.tryEmit(it) },
+        Transfers.incomingBatches,
+        { TransferNotifications.showSummary(this, it, macName()) },
     )
 
     /** Deletes spooled copies of non-regular files (see OutgoingFiles.open) that a crash left behind. */

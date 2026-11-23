@@ -4,8 +4,10 @@ import android.util.Log
 import dev.ivo.droiddrop.core.protocol.Frame
 import dev.ivo.droiddrop.core.protocol.Message
 import dev.ivo.droiddrop.core.session.MessageSender
+import dev.ivo.droiddrop.core.transfer.BatchSummary
 import dev.ivo.droiddrop.core.transfer.FileReceiver
 import dev.ivo.droiddrop.core.transfer.FileSender
+import dev.ivo.droiddrop.core.transfer.IncomingBatches
 import dev.ivo.droiddrop.core.transfer.TransferOutcome
 import dev.ivo.droiddrop.core.transfer.TransferStatus
 import kotlinx.coroutines.CancellationException
@@ -26,6 +28,9 @@ class TransferSession(
     private val sender: FileSender,
     private val onIncoming: (TransferStatus?) -> Unit,
     private val onOutcome: (TransferOutcome) -> Unit,
+    private val incomingBatches: IncomingBatches,
+    /** A received batch ended (or a fallback ended it). Runs on the session thread. */
+    private val onBatchSummary: (BatchSummary) -> Unit,
     /** A send job that died of anything but cancellation. Logged rather than crashing the process. */
     private val onSendFailure: (Throwable) -> Unit = { Log.e(TAG, "file sender stopped", it) },
 ) {
@@ -50,11 +55,21 @@ class TransferSession(
     /** True when [message] is a file message (handled here). */
     fun handle(message: Message): Boolean {
         when (message) {
-            is Message.FileOffer -> guarded { reply(receiver.offer(message)); reportIncoming() }
+            is Message.FileOffer -> {
+                var ended: BatchSummary? = null
+                guarded {
+                    ended = incomingBatches.offer(message)
+                    reply(receiver.offer(message))
+                    reportIncoming()
+                }
+                // Apart from the reply: posting a summary must never keep the Mac waiting for its accept.
+                ended?.let { guarded { onBatchSummary(it) } }
+            }
+            is Message.BatchEnd -> guarded { incomingBatches.end(message)?.let(onBatchSummary) }
             is Message.FileDone -> guarded {
                 receiver.done(message)?.let { (result, outcome) ->
                     reply(result)
-                    onOutcome(outcome)
+                    record(outcome)
                 }
                 reportIncoming()
             }
@@ -72,7 +87,7 @@ class TransferSession(
     fun chunk(chunk: Frame.Chunk) = guarded {
         receiver.chunk(chunk)?.let { (cancel, outcome) ->
             reply(cancel)
-            onOutcome(outcome)
+            record(outcome)
         }
         reportIncoming()
     }
@@ -83,6 +98,12 @@ class TransferSession(
         replies.close()
         receiver.close()
         guarded { onIncoming(null) }
+    }
+
+    /** Feeds the batch tally first, so the list refresh that [onOutcome] triggers sees it. */
+    private fun record(outcome: TransferOutcome) {
+        incomingBatches.outcome(outcome)
+        onOutcome(outcome)
     }
 
     private fun reportIncoming() = onIncoming(receiver.status)
