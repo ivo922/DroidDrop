@@ -59,6 +59,8 @@ public final class FileSender: @unchecked Sendable {
         var tracker: Tracker?
         /// The size at enqueue time: this file's share of the batch progress is clamped to it.
         var enqueuedSize = 0
+        /// Bytes last reported. A re-offer shows them until `file_accept` gives the real resume point.
+        var progress = 0
         var name: String { url.lastPathComponent }
     }
 
@@ -222,7 +224,7 @@ public final class FileSender: @unchecked Sendable {
         active = Active(phase: .hashing)
         let size = head.digest?.size ?? (try? head.url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         active?.size = size
-        onStatus?(status(head, bytesDone: 0, size: size))
+        onStatus?(status(head, bytesDone: head.progress, size: size))
         if head.digest != nil {
             offerHead()
             return
@@ -267,7 +269,7 @@ public final class FileSender: @unchecked Sendable {
         items[0].tracker?.offered = true  // before the write: an unknown batch_end is harmless to the receiver
         link.send(.fileOffer(transferId: id, name: items[0].name, size: digest.size, sha256: digest.hex, mime: mime,
                              batch: items[0].batch))
-        onStatus?(status(items[0], bytesDone: 0, size: digest.size))
+        onStatus?(status(items[0], bytesDone: items[0].progress, size: digest.size))
     }
 
     private func accepted(id: String, offset: Int) {
@@ -286,6 +288,7 @@ public final class FileSender: @unchecked Sendable {
         active?.phase = .sending(id)
         active?.nextOffset = offset
         active?.acked = offset
+        items[0].progress = offset
         onStatus?(status(items[0], bytesDone: offset, size: size))
         pump()
     }
@@ -324,6 +327,7 @@ public final class FileSender: @unchecked Sendable {
         current.inFlight -= 1
         current.acked += count
         active = current
+        items[0].progress = current.acked
         onStatus?(status(items[0], bytesDone: current.acked, size: current.size))
         pump()
     }

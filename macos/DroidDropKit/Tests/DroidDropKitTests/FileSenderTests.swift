@@ -525,6 +525,29 @@ final class OutcomeRecorder: @unchecked Sendable {
         #expect(offer2.batch?.before == 5)
     }
 
+    @Test func reofferKeepsProgressUntilAccepted() async throws {
+        let chunk = FileSender.chunkSize
+        let urls = [try write(Data("12345".utf8), name: "a.txt"), try write(Data(count: 3 * chunk), name: "b.bin")]
+        queue.sync { sender.enqueue(urls); sender.connected(link) }
+        try await complete("a.txt")
+        link.autoComplete = false
+        let offer = try await nextOffer(link, name: "b.bin")
+        queue.sync { sender.receive(.fileAccept(transferId: offer.id, offset: 0)) }
+        _ = try await link.chunks(count: 1)
+        link.completePending()
+        queue.sync {}
+        #expect(recorder.statuses.last??.batch?.bytesDone == 5 + chunk)
+        queue.sync { sender.disconnected() }
+        let link2 = FakeLink()
+        queue.sync { sender.connected(link2) }
+        _ = try await nextOffer(link2, name: "b.bin")
+        queue.sync {}
+        // Before the receiver answers, the line keeps the progress it had instead of dropping to the file's start.
+        let shown = recorder.statuses.last??.batch?.bytesDone
+        #expect(shown == 5 + chunk)
+        #expect(recorder.statuses.last??.bytesDone == chunk)
+    }
+
     @Test func batchEndWaitsForNextSession() async throws {
         // A batch ended while no session is up (cancelled offline); another batch is queued meanwhile.
         let urls = try files("a.txt", "b.txt")
