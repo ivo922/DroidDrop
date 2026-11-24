@@ -124,15 +124,16 @@ class FileSender(
     fun enqueue(files: List<OutgoingFile>) {
         if (files.isEmpty()) return
         val batched = if (files.size >= 2) {
-            val sizes = files.map { readOrNull { it.channel.size() } ?: 0L }
+            // Smallest first, so a screenshot never waits behind a video of the same send; ties keep the picked order.
+            val sized = files.map { it to (readOrNull { it.channel.size() } ?: 0L) }.sortedBy { it.second }
             val id = newId()
-            val total = sizes.sum()
+            val total = sized.sumOf { it.second }
             val tracker = Tracker(id, files.size)
             var before = 0L
-            files.mapIndexed { index, file ->
+            sized.mapIndexed { index, (file, size) ->
                 val info = BatchInfo(id, index.toLong(), files.size.toLong(), total, before)
-                before += sizes[index]
-                Item(file, info, tracker, sizes[index])
+                before += size
+                Item(file, info, tracker, size)
             }
         } else {
             files.map { Item(it) }

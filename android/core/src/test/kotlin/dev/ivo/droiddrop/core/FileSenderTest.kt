@@ -390,16 +390,40 @@ class FileSenderTest {
     }
 
     @Test fun twoFilesFormABatch() = sending {
-        sender.enqueue(listOf(outgoing("a.txt", "hello world".toByteArray()), outgoing("b.txt", "12345".toByteArray())))
+        sender.enqueue(listOf(outgoing("a.txt", "12345".toByteArray()), outgoing("b.txt", "hello world".toByteArray())))
         start()
         val first = complete("a.txt")
         val id = first.batch!!.id
         assertEquals(BatchInfo(id, 0, 2, 16, 0), first.batch)
         val second = complete("b.txt")
-        assertEquals(BatchInfo(id, 1, 2, 16, 11), second.batch)
+        assertEquals(BatchInfo(id, 1, 2, 16, 5), second.batch)
         assertEquals(Message.BatchEnd(id, 2, 2), link.next())
         assertEquals(BatchSummary(Direction.OUTGOING, id, 2, 2), summaries.receive())
         assertEquals(0, sender.pending.value)
+    }
+
+    @Test fun batchSendsSmallestFirst() = sending {
+        sender.enqueue(
+            listOf(
+                outgoing("big.txt", "hello world".toByteArray()),
+                outgoing("small.txt", "12345".toByteArray()),
+                outgoing("mid.txt", "1234567".toByteArray()),
+            ),
+        )
+        start()
+        val first = complete("small.txt")
+        val id = first.batch!!.id
+        assertEquals(BatchInfo(id, 0, 3, 23, 0), first.batch)
+        assertEquals(BatchInfo(id, 1, 3, 23, 5), complete("mid.txt").batch)
+        assertEquals(BatchInfo(id, 2, 3, 23, 12), complete("big.txt").batch)
+    }
+
+    @Test fun equalSizesKeepPickedOrder() = sending {
+        sender.enqueue(listOf(outgoing("c.txt", "12345".toByteArray()), outgoing("a.txt", "abcde".toByteArray()), outgoing("b.txt", "vwxyz".toByteArray())))
+        start()
+        assertEquals(0L, complete("c.txt").batch!!.index)
+        assertEquals(1L, complete("a.txt").batch!!.index)
+        assertEquals(2L, complete("b.txt").batch!!.index)
     }
 
     @Test fun singleFileIsUnbatched() = sending {
@@ -413,11 +437,11 @@ class FileSenderTest {
     }
 
     @Test fun statusCountsThroughBatch() = sending {
-        sender.enqueue(listOf(outgoing("a.txt", "hello world".toByteArray()), outgoing("b.txt", "12345".toByteArray())))
+        sender.enqueue(listOf(outgoing("a.txt", "12345".toByteArray()), outgoing("b.txt", "hello world".toByteArray())))
         start()
         complete("a.txt")
         val offer = link.offer("b.txt")
-        assertEquals(BatchProgress(1, 2, 11, 16), sender.status.value!!.batch)
+        assertEquals(BatchProgress(1, 2, 5, 16), sender.status.value!!.batch)
         reply(Message.FileAccept(offer.transferId, 0))
         link.chunk()
         assertEquals(Message.FileDone(offer.transferId), link.next())
@@ -425,17 +449,17 @@ class FileSenderTest {
     }
 
     @Test fun progressClampedWhenFileGrew() = sending {
-        sender.enqueue(listOf(outgoing("a.txt", "hello world".toByteArray()), outgoing("b.txt", "12345".toByteArray())))
-        File(tmp, "a.txt").appendBytes("123456789".toByteArray()) // 20 bytes now, 11 at enqueue
+        sender.enqueue(listOf(outgoing("a.txt", "12345".toByteArray()), outgoing("b.txt", "hello world".toByteArray())))
+        File(tmp, "a.txt").appendBytes("123456789".toByteArray()) // 14 bytes now, 5 at enqueue
         start()
         val offer = link.offer("a.txt")
-        assertEquals(20L, offer.size)
+        assertEquals(14L, offer.size)
         assertEquals(BatchInfo(offer.batch!!.id, 0, 2, 16, 0), offer.batch)
         reply(Message.FileAccept(offer.transferId, 0))
         link.chunk()
         assertEquals(Message.FileDone(offer.transferId), link.next())
         val progress = sender.status.value!!.batch!!
-        assertEquals(BatchProgress(0, 2, 11, 16), progress)
+        assertEquals(BatchProgress(0, 2, 5, 16), progress)
     }
 
     @Test fun failureListedInSummary() = sending {
