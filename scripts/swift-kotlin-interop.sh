@@ -136,7 +136,8 @@ head -c 1200000 /dev/urandom >"$WORK/up1.bin"
 head -c 900000 /dev/urandom >"$WORK/up2.bin"
 batch_out="$("$DEVCLI" send "$WORK/up1.bin" "$WORK/up2.bin")"
 printf '%s\n' "$batch_out"
-expected=$'CONNECTED droiddrop-server\nSENT up1.bin\nSENT up2.bin'
+# A batch goes smallest first (milestone 8): up2.bin (900 kB) before up1.bin (1.2 MB).
+expected=$'CONNECTED droiddrop-server\nSENT up2.bin\nSENT up1.bin'
 if [[ "$batch_out" != "$expected" ]]; then
     echo "unexpected batch send output" >&2
     exit 1
