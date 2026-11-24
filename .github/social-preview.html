@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DroidDrop Preview</title>
+<link href="https://fonts.googleapis.com/css2?family=Roboto+Flex:opsz,wght@8..144,300..800&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#F7FBF3;--sc:#EBEFE7;--sch:#E0E4DB;--on:#181D18;--onv:#414941;--outv:#C1C9BE;--pri:#3B6939;--onpri:#FFFFFF;--pc:#BCF0B4;--onpc:#002204;--sc2:#D4E8CE;--onsc2:#0F1F0F;--err:#BA1A1A}
+*{box-sizing:border-box}
+html,body{margin:0;background:#F1F5ED}
+body{font-family:'Roboto Flex',Roboto,system-ui,sans-serif;color:var(--on)}
+.card{position:relative;width:1280px;height:640px;overflow:hidden;background:#F1F5ED}
+
+/* left: copy */
+.copy{position:absolute;left:72px;top:0;bottom:0;width:540px;display:flex;flex-direction:column;justify-content:center;gap:28px}
+.brand{display:flex;align-items:center;gap:20px}
+.mark{width:76px;height:76px;border-radius:24px;background:var(--pri);color:#fff;display:flex;align-items:center;justify-content:center}
+.brand h1{margin:0;font-size:72px;line-height:76px;font-weight:700;letter-spacing:-2px}
+.tag{margin:0;font-size:28px;line-height:38px;font-weight:450;letter-spacing:-.3px;color:#2A322A}
+.tag b{font-weight:650;color:var(--pri)}
+.chips{display:flex;flex-wrap:wrap;gap:10px;max-width:540px}
+.chip{display:inline-flex;align-items:center;gap:8px;height:40px;padding:0 16px 0 12px;border-radius:12px;border:1px solid var(--outv);background:var(--bg);font-size:16px;font-weight:500;color:var(--onv)}
+.chip svg{color:var(--pri)}
+.meta{font-family:'Roboto Mono',ui-monospace,monospace;font-size:15px;color:#5A635A;letter-spacing:.2px}
+
+/* right: stage */
+.stage{position:absolute;left:640px;top:0;right:0;bottom:0}
+.blob{position:absolute;left:0;top:40px;width:600px;height:640px;border-radius:56px;background:var(--sc2)}
+
+/* phone */
+.phone{position:absolute;left:36px;top:70px;transform:scale(.86);transform-origin:0 0;width:390px;height:844px;border-radius:44px;background:#1B1F1B;padding:8px;box-shadow:0 30px 60px rgba(20,40,20,.22),0 6px 16px rgba(20,40,20,.12)}
+.screen{width:100%;height:100%;border-radius:36px;overflow:hidden;background:var(--bg);display:flex;flex-direction:column}
+.cam{position:absolute;left:50%;top:20px;width:12px;height:12px;margin-left:-6px;border-radius:6px;background:#0B0D0B}
+.hdr{padding:46px 20px 18px;margin:0;font-size:30px;line-height:38px;font-weight:500;letter-spacing:-.4px}
+.body{padding:0 14px;display:flex;flex-direction:column;gap:22px}
+.status{background:var(--sc);border-radius:26px;padding:18px;display:flex;flex-direction:column;gap:18px}
+.srow{display:flex;gap:14px;align-items:center}
+.badge{flex:none;width:46px;height:46px;border-radius:23px;background:var(--pc);color:var(--onpc);display:flex;align-items:center;justify-content:center}
+.stitle{margin:0;font-size:17px;line-height:23px;font-weight:500}
+.shint{margin:0;font-size:13.5px;line-height:19px;color:var(--onv)}
+.btns{display:flex;gap:8px}
+.btn{flex:1;height:46px;border-radius:23px;display:flex;align-items:center;justify-content:center;gap:8px;font-size:14.5px;font-weight:500}
+.btn.f{background:var(--pri);color:var(--onpri)}
+.btn.t{background:var(--sc2);color:var(--onsc2)}
+.sec{display:flex;justify-content:space-between;align-items:center;padding:0 4px}
+.sec h2{margin:0;font-size:14px;line-height:20px;font-weight:500;color:var(--pri)}
+.sec span{font-size:14px;font-weight:500;color:var(--pri)}
+.list{display:flex;flex-direction:column;gap:2px;border-radius:20px;overflow:hidden}
+.item{display:flex;align-items:center;gap:14px;padding:0 16px;height:70px;background:var(--sc)}
+.tile{flex:none;width:46px;height:46px;border-radius:12px;overflow:hidden;background:var(--sch);display:flex;align-items:center;justify-content:center;color:var(--onv)}
+.tile svg.full{display:block;width:100%;height:100%}
+.meta2{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.name{font-size:15.5px;line-height:21px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.det{font-size:13.5px;line-height:19px;color:var(--onv)}
+.size{flex:none;font-size:12px;color:var(--onv)}
+
+/* mac menu */
+.mac{position:absolute;left:330px;top:200px;width:280px;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',sans-serif}
+.bar{height:28px;border-radius:9px;background:rgba(255,255,255,.92);border:1px solid rgba(0,0,0,.08);box-shadow:0 6px 18px rgba(20,40,20,.10);display:flex;align-items:center;justify-content:flex-end;gap:16px;padding:0 14px;color:#222;font-size:13px;font-weight:500}
+.bar .on{display:flex;align-items:center;justify-content:center;width:30px;height:22px;border-radius:6px;background:rgba(0,0,0,.12)}
+.menu{margin-top:6px;margin-left:0;width:280px;padding:5px;border-radius:12px;background:rgba(250,250,250,.97);border:1px solid rgba(0,0,0,.10);box-shadow:0 18px 50px rgba(0,0,0,.22),0 3px 10px rgba(0,0,0,.10);font-size:13.5px;color:#1d1d1f}
+.mi{height:24px;padding:0 10px 0 22px;border-radius:6px;display:flex;align-items:center;justify-content:space-between;white-space:nowrap}
+.mi.dis{color:#8a8a8e}
+.mi.hi{background:#3B6939;color:#fff}
+.mi .k{color:#8a8a8e}
+.mi.chk{position:relative}
+.mi.chk::before{content:"";position:absolute;left:8px;top:7px;width:6px;height:9px;border:solid #1d1d1f;border-width:0 1.8px 1.8px 0;transform:rotate(45deg)}
+.prog{margin:2px 10px 6px 22px;height:4px;border-radius:2px;background:#E2E2E4;overflow:hidden}
+.prog i{display:block;width:64%;height:100%;background:#3B6939}
+.sep{height:1px;margin:5px 10px;background:rgba(0,0,0,.10)}
+</style>
+</head>
+<body>
+<div class="card">
+
+<div class="copy">
+  <div class="brand">
+    <div class="mark" aria-hidden="true">
+      <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13"></path><path d="m14 4 4 4-4 4"></path><path d="M20 16H7"></path><path d="m10 12-4 4 4 4"></path></svg>
+    </div>
+    <h1>DroidDrop</h1>
+  </div>
+  <p class="tag">Files and clipboard between <b>Android</b> and your <b>Mac</b>, straight over your own Wi‑Fi.</p>
+  <div class="chips">
+    <span class="chip"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4"></path><path d="m7 9 5-5 5 5"></path><path d="M5 20h14"></path></svg>Files both ways</span>
+    <span class="chip"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1"></rect><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"></path></svg>Clipboard sync</span>
+    <span class="chip"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V5a1 1 0 0 1 1-1h3"></path><path d="M16 4h3a1 1 0 0 1 1 1v3"></path><path d="M20 16v3a1 1 0 0 1-1 1h-3"></path><path d="M8 20H5a1 1 0 0 1-1-1v-3"></path><rect x="8" y="8" width="8" height="8" rx="1"></rect></svg>Pair with a QR code</span>
+    <span class="chip"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5a10 10 0 0 1 14 0"></path><path d="M8.5 16a5 5 0 0 1 7 0"></path><path d="M12 19.5h.01"></path></svg>Local network, no cloud</span>
+    <span class="chip"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m8 7-5 5 5 5"></path><path d="m16 7 5 5-5 5"></path></svg>Native Kotlin + Swift</span>
+  </div>
+  <div class="meta">Android 15+ &nbsp;·&nbsp; macOS 26+ &nbsp;·&nbsp; github.com/ivo922/DroidDrop</div>
+</div>
+
+<div class="stage">
+  <div class="blob"></div>
+
+  <div class="phone">
+    <div class="cam"></div>
+    <div class="screen">
+      <p class="hdr">DroidDrop</p>
+      <div class="body">
+        <section class="status">
+          <div class="srow">
+            <div class="badge"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="11" rx="1.5"></rect><path d="M2 19h20"></path></svg></div>
+            <div><p class="stitle">Connected to MacBook Pro</p><p class="shint">Files and clipboard sync over Wi‑Fi</p></div>
+          </div>
+          <div class="btns">
+            <div class="btn f"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4"></path><path d="m7 9 5-5 5 5"></path><path d="M5 20h14"></path></svg>Send files</div>
+            <div class="btn t"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1"></rect><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"></path></svg>Send clipboard</div>
+          </div>
+        </section>
+
+        <div>
+          <div class="sec" style="margin-bottom:8px"><h2>Received</h2><span>View all</span></div>
+          <div class="list">
+            <div class="item">
+              <div class="tile"><svg class="full" viewBox="0 0 48 48" preserveAspectRatio="xMidYMid slice"><rect width="48" height="48" fill="#F6B57A"></rect><circle cx="31" cy="19" r="7" fill="#FCE3B0"></circle><path d="M0 34 14 24l12 8 10-6 12 7v15H0z" fill="#B5543C"></path></svg></div>
+              <div class="meta2"><span class="name">IMG_2041.jpg</span><span class="det">JPG · Today 14:02</span></div><span class="size">3.2 MB</span>
+            </div>
+            <div class="item">
+              <div class="tile"><svg class="full" viewBox="0 0 48 48" preserveAspectRatio="xMidYMid slice"><rect width="48" height="48" fill="#2B3440"></rect><path d="M0 34 48 26v22H0z" fill="#3E4A59"></path><circle cx="24" cy="24" r="10" fill="rgba(0,0,0,.45)"></circle><path d="M21 19l8 5-8 5z" fill="#FFFFFF"></path></svg></div>
+              <div class="meta2"><span class="name">Screen Recording 2026-11-15.mov</span><span class="det">MOV · Today 11:37</span></div><span class="size">48.6 MB</span>
+            </div>
+            <div class="item">
+              <div class="tile"><svg class="full" viewBox="0 0 48 48" preserveAspectRatio="xMidYMid slice"><rect width="48" height="48" fill="#A9D3EE"></rect><circle cx="14" cy="16" r="5" fill="#FFF4D6"></circle><path d="M0 30q6-3 12 0t12 0 12 0 12 0v18H0z" fill="#2E6F9E"></path><path d="M0 38q6-3 12 0t12 0 12 0 12 0v10H0z" fill="#245A82"></path></svg></div>
+              <div class="meta2"><span class="name">IMG_2038.jpg</span><span class="det">JPG · Today 10:12</span></div><span class="size">2.9 MB</span>
+            </div>
+            <div class="item">
+              <div class="tile"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path><path d="M9 13h6"></path><path d="M9 17h4"></path></svg></div>
+              <div class="meta2"><span class="name">Invoice-October.pdf</span><span class="det">PDF · Yesterday 18:20</span></div><span class="size">212 kB</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mac">
+    <div class="bar">
+      <span class="on"><svg width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#222"></circle><path d="M7 9.5h9m-2.5-2.5 2.5 2.5-2.5 2.5M17 14.5H8m2.5-2.5L8 14.5l2.5 2.5" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"></path></svg></span>
+      <span>Tue 24 Nov&nbsp; 14:02</span>
+    </div>
+    <div class="menu">
+      <div class="mi dis">Connected: Pixel 9</div>
+      <div class="mi dis">Receiving IMG_2041.jpg — 64%</div>
+      <div class="mi hi">Send Files…</div>
+      <div class="mi">Open Received Files</div>
+      <div class="sep"></div>
+      <div class="mi">Pair New Phone…</div>
+      <div class="mi">Paired Devices <span class="k">›</span></div>
+      <div class="sep"></div>
+      <div class="mi chk">Launch at Login</div>
+      <div class="sep"></div>
+      <div class="mi">Quit DroidDrop <span class="k">⌘Q</span></div>
+    </div>
+  </div>
+</div>
+
+</div>
+</body>
+</html>

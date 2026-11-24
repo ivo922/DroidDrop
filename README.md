@@ -1,5 +1,7 @@
 # DroidDrop
 
+![DroidDrop: files and clipboard between Android and your Mac](.github/social-preview.png)
+
 Android ↔ macOS file transfer and clipboard sync over the local network.
 
 - Wire protocol: [`protocol/SPEC.md`](protocol/SPEC.md), conformance fixtures in [`protocol/fixtures/`](protocol/fixtures/)
