@@ -122,17 +122,20 @@ public final class FileSender: @unchecked Sendable {
             }
         }
         if regular.count >= 2 {
-            let sizes = regular.map { (try? $0.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0 }
+            // Smallest first, so a screenshot never waits behind a video of the same send; ties keep the picked order.
+            let sized = regular.enumerated()
+                .map { (order: $0.offset, url: $0.element, size: (try? $0.element.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0) }
+                .sorted { ($0.size, $0.order) < ($1.size, $1.order) }
             let tracker = Tracker(id: makeID(), count: regular.count)
-            let total = sizes.reduce(0, +)
+            let total = sized.reduce(0) { $0 + $1.size }
             var before = 0
-            for (index, url) in regular.enumerated() {
+            for (index, file) in sized.enumerated() {
                 nextSerial += 1
-                var item = Item(url: url, serial: nextSerial)
+                var item = Item(url: file.url, serial: nextSerial)
                 item.batch = BatchInfo(id: tracker.id, index: index, count: regular.count, size: total, before: before)
                 item.tracker = tracker
-                item.enqueuedSize = sizes[index]
-                before += sizes[index]
+                item.enqueuedSize = file.size
+                before += file.size
                 items.append(item)
             }
         } else {

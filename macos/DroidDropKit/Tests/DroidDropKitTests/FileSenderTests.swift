@@ -404,16 +404,36 @@ final class OutcomeRecorder: @unchecked Sendable {
     }
 
     @Test func twoFilesFormABatch() async throws {
-        let urls = [try write(Data("hello world".utf8), name: "a.txt"), try write(Data("12345".utf8), name: "b.txt")]
+        let urls = [try write(Data("12345".utf8), name: "a.txt"), try write(Data("hello world".utf8), name: "b.txt")]
         queue.sync { sender.enqueue(urls); sender.connected(link) }
         let first = try await complete("a.txt")
         let id = try #require(first.batch).id
         #expect(first.batch == BatchInfo(id: id, index: 0, count: 2, size: 16, before: 0))
         let second = try await complete("b.txt")
-        #expect(second.batch == BatchInfo(id: id, index: 1, count: 2, size: 16, before: 11))
+        #expect(second.batch == BatchInfo(id: id, index: 1, count: 2, size: 16, before: 5))
         #expect(try await link.next() == .batchEnd(batch: id, count: 2, sent: 2, cancelled: false))
         #expect(recorder.summaries == [BatchSummary(direction: .outgoing, batch: id, count: 2, done: 2)])
         #expect(queue.sync { sender.queuedCount } == 0)
+    }
+
+    @Test func batchSendsSmallestFirst() async throws {
+        let urls = [try write(Data("hello world".utf8), name: "big.txt"), try write(Data("12345".utf8), name: "small.txt"),
+                    try write(Data("1234567".utf8), name: "mid.txt")]
+        queue.sync { sender.enqueue(urls); sender.connected(link) }
+        let first = try await complete("small.txt")
+        let id = try #require(first.batch).id
+        #expect(first.batch == BatchInfo(id: id, index: 0, count: 3, size: 23, before: 0))
+        #expect(try await complete("mid.txt").batch == BatchInfo(id: id, index: 1, count: 3, size: 23, before: 5))
+        #expect(try await complete("big.txt").batch == BatchInfo(id: id, index: 2, count: 3, size: 23, before: 12))
+    }
+
+    @Test func equalSizesKeepPickedOrder() async throws {
+        let urls = [try write(Data("12345".utf8), name: "c.txt"), try write(Data("abcde".utf8), name: "a.txt"),
+                    try write(Data("vwxyz".utf8), name: "b.txt")]
+        queue.sync { sender.enqueue(urls); sender.connected(link) }
+        #expect(try await complete("c.txt").batch?.index == 0)
+        #expect(try await complete("a.txt").batch?.index == 1)
+        #expect(try await complete("b.txt").batch?.index == 2)
     }
 
     @Test func batchIdComesFromMakeID() async throws {
@@ -448,11 +468,11 @@ final class OutcomeRecorder: @unchecked Sendable {
     }
 
     @Test func statusCountsThroughBatch() async throws {
-        let urls = [try write(Data("hello world".utf8), name: "a.txt"), try write(Data("12345".utf8), name: "b.txt")]
+        let urls = [try write(Data("12345".utf8), name: "a.txt"), try write(Data("hello world".utf8), name: "b.txt")]
         queue.sync { sender.enqueue(urls); sender.connected(link) }
         try await complete("a.txt")
         let offer = try await nextOffer(link, name: "b.txt")
-        #expect(recorder.statuses.last??.batch == BatchProgress(index: 1, count: 2, bytesDone: 11, size: 16))
+        #expect(recorder.statuses.last??.batch == BatchProgress(index: 1, count: 2, bytesDone: 5, size: 16))
         queue.sync { sender.receive(.fileAccept(transferId: offer.id, offset: 0)) }
         _ = try await link.chunks(count: 1)
         #expect(try await link.next() == .fileDone(transferId: offer.id))
@@ -461,12 +481,12 @@ final class OutcomeRecorder: @unchecked Sendable {
     }
 
     @Test func progressClampedWhenFileGrew() async throws {
-        let a = try write(Data("hello world".utf8), name: "a.txt")
-        let b = try write(Data("12345".utf8), name: "b.txt")
+        let a = try write(Data("12345".utf8), name: "a.txt")
+        let b = try write(Data("hello world".utf8), name: "b.txt")
         queue.sync { sender.enqueue([a, b]) }
-        try Data("hello world123456789".utf8).write(to: a)  // 20 bytes now, 11 at enqueue
+        try Data("12345123456789".utf8).write(to: a)  // 14 bytes now, 5 at enqueue
         queue.sync { sender.connected(link) }
-        guard case .fileOffer(let id, "a.txt", 20, _, _, let batch) = try await link.next() else {
+        guard case .fileOffer(let id, "a.txt", 14, _, _, let batch) = try await link.next() else {
             Issue.record("no offer"); return
         }
         #expect(batch == BatchInfo(id: try #require(batch).id, index: 0, count: 2, size: 16, before: 0))
@@ -475,7 +495,7 @@ final class OutcomeRecorder: @unchecked Sendable {
         #expect(try await link.next() == .fileDone(transferId: id))
         queue.sync {}
         let progress = try #require(recorder.statuses.last??.batch)
-        #expect(progress == BatchProgress(index: 0, count: 2, bytesDone: 11, size: 16))
+        #expect(progress == BatchProgress(index: 0, count: 2, bytesDone: 5, size: 16))
         #expect(recorder.statuses.compactMap { $0?.batch }.allSatisfy { $0.bytesDone <= $0.size })
     }
 
