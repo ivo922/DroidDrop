@@ -1,5 +1,7 @@
 package dev.ivo.droiddrop.core
 
+import kotlinx.coroutines.delay
+import dev.ivo.droiddrop.core.protocol.FrameLimits
 import dev.ivo.droiddrop.core.protocol.BatchInfo
 import dev.ivo.droiddrop.core.protocol.Frame
 import dev.ivo.droiddrop.core.protocol.Message
@@ -509,6 +511,26 @@ class FileSenderTest {
         assertNotEquals(offer1.transferId, offer2.transferId)
         assertEquals(BatchInfo(offer1.batch!!.id, 1, 2, 10, 5), offer2.batch)
         assertEquals(offer1.batch, offer2.batch)
+    }
+
+    @Test fun reofferKeepsProgressUntilAccepted() = sending {
+        val gate = Semaphore(2) // a.txt's chunk and b.bin's first chunk; the second blocks
+        val gated = FakeLink(chunkGate = gate)
+        val chunk = FrameLimits.MAX_CHUNK_DATA.toLong()
+        sender.enqueue(listOf(outgoing("a.txt", "12345".toByteArray()), outgoing("b.bin", ByteArray(3 * FrameLimits.MAX_CHUNK_DATA))))
+        val first = start(gated)
+        complete("a.txt", on = gated)
+        val offer = gated.offer("b.bin")
+        reply(Message.FileAccept(offer.transferId, 0))
+        gated.chunk()
+        withTimeout(5_000) { while (sender.status.value?.batch?.bytesDone != 5 + chunk) delay(10) }
+        first.cancelAndJoin()
+        val link2 = FakeLink()
+        start(link2, Channel(Channel.UNLIMITED))
+        link2.offer("b.bin")
+        // Before the receiver answers, the line keeps the progress it had instead of dropping to the file's start.
+        assertEquals(5 + chunk, sender.status.value!!.batch!!.bytesDone)
+        assertEquals(chunk, sender.status.value!!.bytesDone)
     }
 
     @Test fun batchEndWaitsForNextSession() = sending {

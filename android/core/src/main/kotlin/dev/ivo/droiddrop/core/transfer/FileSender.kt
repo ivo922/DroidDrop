@@ -67,6 +67,9 @@ class FileSender(
 
         /** Set by [cancelAll] while [run] owns this item; [run] then sends `file_cancel` and reports it. */
         @Volatile var cancelled = false
+
+        /** Bytes last reported for this file. A re-offer shows them until `file_accept` gives the real resume point. */
+        @Volatile var progress = 0L
     }
 
     private class Digest(val size: Long, val sha256: String)
@@ -245,7 +248,7 @@ class FileSender(
             Digest(size, sha256).also { item.digest = it }
         }
         val size = digest.size
-        publish(item, 0, size)
+        publish(item, item.progress, size)
         currentCoroutineContext().ensureActive()
         if (item.cancelled) return failed(CANCELLED)
 
@@ -404,6 +407,7 @@ class FileSender(
     }
 
     private fun publish(item: Item, bytesDone: Long, size: Long) {
+        item.progress = bytesDone
         // Files queued after the active file's batch (after the file itself when unbatched).
         val queued = synchronized(lock) {
             val at = items.indexOf(item)
