@@ -138,7 +138,7 @@ class ConnectionService : Service() {
                         paired = store.load() != null,
                     )
                     if (keep) {
-                        Transfers.retry.replace(summary.retry)
+                        Transfers.retry.replace(summary.batch, summary.retry)
                     } else {
                         Transfers.retry.clear()
                         summary.retry.forEach(OutgoingFile::release)

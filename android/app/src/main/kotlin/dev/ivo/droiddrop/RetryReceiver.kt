@@ -8,17 +8,19 @@ import android.widget.Toast
 /** The Retry action, tap and swipe of a sender summary. Everything is an explicit broadcast to this receiver. */
 class RetryReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        val batch = intent.getStringExtra(EXTRA_BATCH) ?: return
         when (intent.action) {
-            RETRY -> retry(context)
-            DISMISS -> Transfers.retry.clear()
+            RETRY -> retry(context, batch)
+            DISMISS -> Transfers.retry.clear(batch)
         }
     }
 
-    private fun retry(context: Context) {
-        val files = Transfers.retry.take()
+    private fun retry(context: Context, batch: String) {
+        val files = Transfers.retry.take(batch)
         TransferNotifications.cancelSentSummary(context)
         if (files.isEmpty()) {
-            // The process died since the summary was posted: the notification outlived the open files.
+            // The process died since the summary was posted (the notification outlived the open files), or a newer
+            // summary replaced this one and its files.
             Toast.makeText(context, "Share the files again.", Toast.LENGTH_LONG).show()
             return
         }
@@ -34,5 +36,6 @@ class RetryReceiver : BroadcastReceiver() {
     companion object {
         const val RETRY = "dev.ivo.droiddrop.RETRY"
         const val DISMISS = "dev.ivo.droiddrop.DISMISS"
+        const val EXTRA_BATCH = "batch"
     }
 }

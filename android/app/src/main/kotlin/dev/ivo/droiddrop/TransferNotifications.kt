@@ -82,9 +82,9 @@ object TransferNotifications {
         if (outgoing) {
             if (withRetry) {
                 // Only the action retries; a tap or a swipe releases the files.
-                val dismiss = retryIntent(context, RetryReceiver.DISMISS)
+                val dismiss = retryIntent(context, RetryReceiver.DISMISS, summary.batch)
                 builder.setContentIntent(dismiss)
-                    .addAction(0, "Retry", retryIntent(context, RetryReceiver.RETRY))
+                    .addAction(0, "Retry", retryIntent(context, RetryReceiver.RETRY, summary.batch))
                     .setDeleteIntent(dismiss)
             }
         } else {
@@ -103,13 +103,16 @@ object TransferNotifications {
     /** Removes the sender summary, for example a stale Retry after a process start. */
     fun cancelSentSummary(context: Context) = manager(context).cancel(SENT_SUMMARY_ID)
 
-    /** Explicit broadcast to [RetryReceiver]; the action tells the three entry points apart. */
-    private fun retryIntent(context: Context, action: String): PendingIntent =
+    /**
+     * Explicit broadcast to [RetryReceiver]; the action tells the three entry points apart and [batch] says whose files.
+     * The request code is per batch, so an older summary's PendingIntent never carries a newer batch id.
+     */
+    private fun retryIntent(context: Context, action: String, batch: String): PendingIntent =
         PendingIntent.getBroadcast(
             context,
-            0,
-            Intent(context, RetryReceiver::class.java).setAction(action),
-            PendingIntent.FLAG_IMMUTABLE,
+            batch.hashCode(),
+            Intent(context, RetryReceiver::class.java).setAction(action).putExtra(RetryReceiver.EXTRA_BATCH, batch),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
 
     private fun showProgress(context: Context, id: Int, status: TransferStatus?) {
