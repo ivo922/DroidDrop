@@ -16,7 +16,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             notifier.requestAuthorization()
             let model = try AppModel(notifier: notifier)
             self.model = model
-            statusMenu = StatusMenuController(model: model)
+            let statusMenu = StatusMenuController(model: model)
+            self.statusMenu = statusMenu
+            notifier.onOpenReceivedFolder = { [weak statusMenu] in statusMenu?.openReceivedFiles() }
         } catch {
             let alert = NSAlert()
             alert.messageText = "DroidDrop could not start"

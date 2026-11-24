@@ -19,8 +19,8 @@ final class TransferNotifier: NSObject, UNUserNotificationCenterDelegate {
 
     /// Set by `AppModel`: Retry resends the failed files to the stored fingerprint.
     var onRetry: (([URL], Data) -> Void)?
-    /// Set by `AppModel` (`receivedFilesFolder`): where Show in Finder falls back to.
-    var receivedFolder: URL?
+    /// Set by `AppDelegate`: "Open Received Files", which Show in Finder falls back to (one path, one error alert).
+    var onOpenReceivedFolder: (() -> Void)?
 
     /// Registers the category and asks for permission. Denial is fine: transfers still work, silently.
     func requestAuthorization() {
@@ -89,9 +89,7 @@ final class TransferNotifier: NSObject, UNUserNotificationCenterDelegate {
             NSWorkspace.shared.activateFileViewerSelecting(urls)
             return
         }
-        guard let folder = receivedFolder else { return }
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        NSWorkspace.shared.open(folder)
+        onOpenReceivedFolder?()
     }
 
     private func retry(_ paths: [String], fingerprint: Data) {

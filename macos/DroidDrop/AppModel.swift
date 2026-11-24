@@ -38,7 +38,6 @@ final class AppModel: ObservableObject {
 
     init(notifier: TransferNotifier) throws {
         self.notifier = notifier
-        notifier.receivedFolder = receivedFilesFolder
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appending(path: "DroidDrop")
         let identity = try IdentityStore(directory: support).loadOrCreate(commonName: "DroidDrop Mac")

@@ -108,7 +108,8 @@ final class StatusMenuController: NSObject, NSMenuDelegate, NSMenuItemValidation
         model.sendFiles(panel.urls)
     }
 
-    @objc private func openReceivedFiles() {
+    /// Also Show in Finder's fallback when none of a batch's files is left.
+    @objc func openReceivedFiles() {
         guard let message = model.openReceivedFiles() else { return }
         let alert = NSAlert()
         alert.messageText = "Could not open the received files folder"
