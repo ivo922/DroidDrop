@@ -18,6 +18,7 @@ Android ↔ macOS file transfer and clipboard sync over the LAN. Read `README.md
 | Swift ↔ Kotlin interop | `scripts/swift-kotlin-interop.sh` (ends with `INTEROP OK`) |
 | Mac app build | `cd macos && xcodegen generate && xcodebuild -project DroidDrop.xcodeproj -scheme DroidDrop build` |
 | Install both apps on a device | `scripts/dev-install.sh` (restarts the running Mac app, installs on the adb phone) |
+| Release downloads into `dist/` | `scripts/build-release.sh mac\|android vX.Y.Z` (CI: a pushed `vX.Y.Z` tag runs `.github/workflows/release.yml`) |
 
 ## Rules that are easy to break
 

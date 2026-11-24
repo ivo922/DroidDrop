@@ -16,3 +16,4 @@ android/.idea/
 
 # Python
 __pycache__/
+dist/

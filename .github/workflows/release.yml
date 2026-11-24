@@ -1,0 +1,86 @@
+# Pushing a vX.Y.Z tag runs every gate, builds both apps and publishes them as a GitHub Release.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  mac:
+    name: Check and build macOS app
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install tools
+        run: |
+          brew install xcodegen
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37" "build-tools;37.0.0" > /dev/null
+          echo "DEVELOPER_DIR=$(xcode-select -p)" >> "$GITHUB_ENV"
+      - name: Check
+        run: scripts/check.sh
+      - name: Build
+        run: scripts/build-release.sh mac "$GITHUB_REF_NAME"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: dist/
+          if-no-files-found: error
+
+  android:
+    name: Build Android app
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install SDK packages
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37" "build-tools;37.0.0" > /dev/null
+      - name: Build signed APK
+        env:
+          KEYSTORE_BASE64: ${{ secrets.DROIDDROP_KEYSTORE_BASE64 }}
+          DROIDDROP_KEYSTORE_PASSWORD: ${{ secrets.DROIDDROP_KEYSTORE_PASSWORD }}
+        run: |
+          export DROIDDROP_KEYSTORE="$RUNNER_TEMP/droiddrop-release.jks"
+          base64 --decode <<< "$KEYSTORE_BASE64" > "$DROIDDROP_KEYSTORE"
+          scripts/build-release.sh android "$GITHUB_REF_NAME"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [mac, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag \
+            --title "DroidDrop ${GITHUB_REF_NAME#v}" \
+            --notes-file .github/release-notes.md --generate-notes

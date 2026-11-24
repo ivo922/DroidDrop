@@ -12,8 +12,21 @@ android {
         applicationId = "dev.ivo.droiddrop"
         minSdk = 35
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        // Release builds pass these from the tag (scripts/release-version.sh).
+        versionCode = providers.gradleProperty("droiddrop.versionCode").map(String::toInt).getOrElse(1)
+        versionName = providers.gradleProperty("droiddrop.versionName").getOrElse("0.1.0")
+    }
+
+    // The release key lives outside the repo; without it assembleRelease leaves an unsigned APK.
+    val releaseKeystore = providers.environmentVariable("DROIDDROP_KEYSTORE").orNull
+    if (releaseKeystore != null) {
+        val releaseSigning = signingConfigs.create("release") {
+            storeFile = file(releaseKeystore)
+            storePassword = providers.environmentVariable("DROIDDROP_KEYSTORE_PASSWORD").get()
+            keyAlias = "droiddrop"
+            keyPassword = storePassword
+        }
+        buildTypes.getByName("release").signingConfig = releaseSigning
     }
 
     buildFeatures {
