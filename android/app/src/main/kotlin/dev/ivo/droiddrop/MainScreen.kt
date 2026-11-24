@@ -2,6 +2,7 @@ package dev.ivo.droiddrop
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,6 +41,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -116,7 +118,7 @@ fun MainScreen(
                 }
             }
             item {
-                SegmentRow(index = 2, count = settings, minHeight = 64.dp, onClick = { onHoldClipsChange(!holdClips) }) {
+                SegmentRow(index = 2, count = settings, minHeight = 64.dp, checked = holdClips, onToggle = onHoldClipsChange) {
                     RowIcon(R.drawable.ic_clipboard)
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.weight(1f)) {
                         Text("Hold Mac clips while locked", style = MaterialTheme.typography.bodyLarge)
@@ -127,7 +129,7 @@ fun MainScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    Switch(checked = holdClips, onCheckedChange = onHoldClipsChange)
+                    Switch(checked = holdClips, onCheckedChange = null) // the row handles the toggle
                 }
             }
             if (paired) {
@@ -287,6 +289,9 @@ fun SegmentRow(
     count: Int,
     onClick: (() -> Unit)? = null,
     minHeight: Dp = 56.dp,
+    /** With [onToggle], the whole row is one switch for accessibility (TalkBack reads label, text and state once). */
+    checked: Boolean = false,
+    onToggle: ((Boolean) -> Unit)? = null,
     content: @Composable RowScope.() -> Unit,
 ) {
     Row(
@@ -296,6 +301,7 @@ fun SegmentRow(
             .clip(segmentShape(index, count))
             .background(MaterialTheme.colorScheme.surfaceContainer)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(if (onToggle != null) Modifier.toggleable(value = checked, role = Role.Switch, onValueChange = onToggle) else Modifier)
             .heightIn(min = minHeight)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
