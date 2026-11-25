@@ -9,9 +9,22 @@ Android ↔ macOS file transfer and clipboard sync over the local network.
 
 ## Install
 
-Download the Android `.apk` and the Mac `-macOS.zip` from the [latest release](../../releases/latest). Steps for each
-are in the release notes; the Mac app is not notarized, so its first launch needs **Open Anyway** in System Settings ›
-Privacy & Security.
+Download the Android `.apk` and the Mac `-macOS.zip` from the [latest release](../../releases/latest).
+
+**Mac**
+
+1. Unzip and move `DroidDrop.app` to `/Applications`.
+2. Open it. The app is not notarized, so macOS says it cannot be verified and offers to move it to the Trash. Choose
+   **Done**, then **Open Anyway** in System Settings › Privacy & Security. Or clear the quarantine flag from a terminal:
+   `xattr -dr com.apple.quarantine /Applications/DroidDrop.app`
+3. The first launch from `/Applications` turns on **Launch at Login**. Turn it off in the menu-bar menu if you don't
+   want it; DroidDrop won't turn it back on.
+
+**Android**
+
+Install the `.apk` (allow installs from your browser or file manager when asked). If a debug build from
+`scripts/dev-install.sh` is on the phone, uninstall it first (`adb uninstall dev.ivo.droiddrop`): it is signed with a
+different key, so the release can't install over it.
 
 ## Verify
 
