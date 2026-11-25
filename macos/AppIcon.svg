@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Master for macos/DroidDrop/Assets.xcassets/AppIcon.appiconset (regenerate with scripts/gen-icons.sh). -->
+  <defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#3B6939" filter="url(#shadow)"/>
+  <g transform="translate(264.8 264.8) scale(20.6)" fill="none" stroke="#FFFFFF" stroke-width="2.1"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 8h13"/>
+    <path d="m14 4 4 4-4 4"/>
+    <path d="M20 16H7"/>
+    <path d="m10 12-4 4 4 4"/>
+  </g>
+</svg>
