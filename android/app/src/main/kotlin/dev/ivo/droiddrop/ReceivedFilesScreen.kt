@@ -2,7 +2,7 @@ package dev.ivo.droiddrop
 
 import android.text.format.Formatter
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -67,6 +67,7 @@ fun ReceivedFilesScreen(
     onViewChange: (ReceivedView) -> Unit,
     onBack: () -> Unit,
     onOpen: (ReceivedFile) -> Unit,
+    onActions: (ReceivedFile) -> Unit,
 ) {
     val context = LocalContext.current
     val files = received.orEmpty()
@@ -116,8 +117,8 @@ fun ReceivedFilesScreen(
                 item { Box(Modifier.padding(horizontal = 16.dp)) { EmptyReceived(text) } }
             }
             when (view) {
-                ReceivedView.TIMELINE -> timeline(days, onOpen)
-                ReceivedView.GALLERY -> gallery(days, onOpen)
+                ReceivedView.TIMELINE -> timeline(days, onOpen, onActions)
+                ReceivedView.GALLERY -> gallery(days, onOpen, onActions)
             }
         }
     }
@@ -169,12 +170,12 @@ private val ReceivedView.icon: Int
     }
 
 /** A date rail beside each day's plain rows, with the day's file count and size. */
-private fun LazyListScope.timeline(days: List<Day>, onOpen: (ReceivedFile) -> Unit) {
-    items(days, key = { "timeline:${it.items.first().uri}" }) { day -> TimelineDay(day, onOpen) }
+private fun LazyListScope.timeline(days: List<Day>, onOpen: (ReceivedFile) -> Unit, onActions: (ReceivedFile) -> Unit) {
+    items(days, key = { "timeline:${it.items.first().uri}" }) { day -> TimelineDay(day, onOpen, onActions) }
 }
 
 @Composable
-private fun TimelineDay(day: Day, onOpen: (ReceivedFile) -> Unit) {
+private fun TimelineDay(day: Day, onOpen: (ReceivedFile) -> Unit, onActions: (ReceivedFile) -> Unit) {
     val context = LocalContext.current
     Column {
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -191,7 +192,7 @@ private fun TimelineDay(day: Day, onOpen: (ReceivedFile) -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 6.dp),
                 )
-                day.items.forEach { file -> TimelineRow(file, onOpen) }
+                day.items.forEach { file -> TimelineRow(file, onOpen, onActions) }
             }
         }
     }
@@ -227,14 +228,17 @@ private fun DateRail(day: Day) {
 }
 
 @Composable
-private fun TimelineRow(file: ReceivedFile, onOpen: (ReceivedFile) -> Unit) {
-    val context = LocalContext.current
+private fun TimelineRow(file: ReceivedFile, onOpen: (ReceivedFile) -> Unit, onActions: (ReceivedFile) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(60.dp)
             .clip(RoundedCornerShape(12.dp))
-            .clickable { onOpen(file) }
+            .combinedClickable(
+                onClick = { onOpen(file) },
+                onLongClick = { onActions(file) },
+                onLongClickLabel = ReceivedFileText.ACTIONS_LABEL,
+            )
             .padding(horizontal = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -252,16 +256,25 @@ private fun TimelineRow(file: ReceivedFile, onOpen: (ReceivedFile) -> Unit) {
 }
 
 /** Per day: photos and videos as a three-column grid, then the other files as grouped rows. */
-private fun LazyListScope.gallery(days: List<Day>, onOpen: (ReceivedFile) -> Unit) {
+private fun LazyListScope.gallery(days: List<Day>, onOpen: (ReceivedFile) -> Unit, onActions: (ReceivedFile) -> Unit) {
     days.forEach { day ->
         val (media, others) = day.items.partition { FileKind.of(it.mime, it.name).hasThumbnail }
         val rows = media.chunked(3)
         stickyHeader(key = "gallery:${day.items.first().uri}") { GalleryHeading(day) }
-        itemsIndexed(rows, key = { _, row -> row.first().uri }) { index, row -> GalleryRow(row, index, rows.size, onOpen) }
+        itemsIndexed(rows, key = { _, row -> row.first().uri }) { index, row ->
+            GalleryRow(row, index, rows.size, onOpen, onActions)
+        }
         if (rows.isNotEmpty() && others.isNotEmpty()) item { Spacer(Modifier.height(8.dp)) }
         itemsIndexed(others, key = { _, file -> file.uri }) { index, file ->
             Box(Modifier.padding(horizontal = 16.dp)) {
-                SegmentRow(index = index, count = others.size, onClick = { onOpen(file) }, minHeight = 64.dp) {
+                SegmentRow(
+                    index = index,
+                    count = others.size,
+                    onClick = { onOpen(file) },
+                    onLongClick = { onActions(file) },
+                    onLongClickLabel = ReceivedFileText.ACTIONS_LABEL,
+                    minHeight = 64.dp,
+                ) {
                     FileTile(file, modifier = Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)), thumbnailSize = 40.dp, emojiSize = 20.sp)
                     FileText(file, modifier = Modifier.weight(1f))
                     FileSize(file)
@@ -293,7 +306,13 @@ private fun GalleryHeading(day: Day) {
 
 /** Row [index] of [count] in one day's grid; a short last row keeps its cells a third wide. */
 @Composable
-private fun GalleryRow(row: List<ReceivedFile>, index: Int, count: Int, onOpen: (ReceivedFile) -> Unit) {
+private fun GalleryRow(
+    row: List<ReceivedFile>,
+    index: Int,
+    count: Int,
+    onOpen: (ReceivedFile) -> Unit,
+    onActions: (ReceivedFile) -> Unit,
+) {
     Row(
         modifier = Modifier
             .padding(horizontal = 16.dp)
@@ -302,16 +321,25 @@ private fun GalleryRow(row: List<ReceivedFile>, index: Int, count: Int, onOpen: 
         horizontalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         row.forEach { file ->
-            FileTile(
-                file,
-                modifier = Modifier
-                    .weight(1f)
-                    .aspectRatio(1f)
-                    .clickable { onOpen(file) }
-                    .semantics { contentDescription = file.name },
-                thumbnailSize = GalleryThumbnail,
-                emojiSize = 32.sp,
-            )
+            // Overlay the clickable surface on top of the opaque thumbnail so press/long-press ripples stay visible.
+            Box(modifier = Modifier.weight(1f).aspectRatio(1f)) {
+                FileTile(
+                    file,
+                    modifier = Modifier.fillMaxSize(),
+                    thumbnailSize = GalleryThumbnail,
+                    emojiSize = 32.sp,
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .combinedClickable(
+                            onClick = { onOpen(file) },
+                            onLongClick = { onActions(file) },
+                            onLongClickLabel = ReceivedFileText.ACTIONS_LABEL,
+                        )
+                        .semantics { contentDescription = file.name },
+                )
+            }
         }
         repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
     }

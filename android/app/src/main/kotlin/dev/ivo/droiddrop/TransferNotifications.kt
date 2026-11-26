@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
 import androidx.core.app.NotificationCompat
 import dev.ivo.droiddrop.core.transfer.BatchSummary
 import dev.ivo.droiddrop.core.transfer.Direction
@@ -23,8 +24,11 @@ object TransferNotifications {
     private const val SENT_SUMMARY_ID = 6 // R6
     private const val RECEIVED_SUMMARY_ID = 7
     private const val FIRST_FAILURE_ID = 100
+    private const val EXTRA_RECEIVED_URI = "dev.ivo.droiddrop.extra.RECEIVED_URI"
 
     private val nextFailureId = AtomicInteger(FIRST_FAILURE_ID)
+    @Volatile
+    private var lastReceivedUri: String? = null
 
     fun createChannel(context: Context) {
         context.getSystemService(NotificationManager::class.java)
@@ -60,6 +64,8 @@ object TransferNotifications {
             .setAutoCancel(true)
         val id = when (outcome) {
             is TransferOutcome.Received -> {
+                lastReceivedUri = outcome.location
+                builder.addExtras(Bundle().apply { putString(EXTRA_RECEIVED_URI, outcome.location) })
                 openIntent(context, Uri.parse(outcome.location))?.let(builder::setContentIntent)
                 RECEIVED_ID
             }
@@ -102,6 +108,20 @@ object TransferNotifications {
 
     /** Removes the sender summary, for example a stale Retry after a process start. */
     fun cancelSentSummary(context: Context) = manager(context).cancel(SENT_SUMMARY_ID)
+
+    /** Cancels the single-file received notification if it still points at [uri]. */
+    fun cancelReceivedIfMatching(context: Context, uri: Uri) {
+        val target = uri.toString()
+        val matches = lastReceivedUri == target || runCatching {
+            manager(context).activeNotifications.any {
+                it.id == RECEIVED_ID && it.notification.extras.getString(EXTRA_RECEIVED_URI) == target
+            }
+        }.getOrDefault(false)
+        if (matches) {
+            if (lastReceivedUri == target) lastReceivedUri = null
+            manager(context).cancel(RECEIVED_ID)
+        }
+    }
 
     /**
      * Explicit broadcast to [RetryReceiver]; the action tells the three entry points apart and [batch] says whose files.

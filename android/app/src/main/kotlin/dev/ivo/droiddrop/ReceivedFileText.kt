@@ -12,6 +12,15 @@ object ReceivedFileText {
     private val dayMonth = DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH)
     private val dayMonthYear = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH)
 
+    const val ACTIONS_LABEL = "File actions"
+    const val OPEN_WITH_TITLE = "Open with"
+    const val ACTION_SHARE = "Share"
+    const val ACTION_OPEN_WITH = "Open with…"
+    const val ACTION_OPEN_FOLDER = "Open in folder"
+    const val ACTION_DELETE = "Delete"
+    const val DELETE_DIALOG_TITLE = "Delete file?"
+    const val ACTION_CANCEL = "Cancel"
+
     /** Upper-case extension after the last non-leading `.`, as in FileName; "" when there is none. */
     fun extension(name: String): String {
         val dot = name.lastIndexOf('.')
@@ -40,6 +49,24 @@ object ReceivedFileText {
     /** Toast when a row cannot be opened: no viewer app (R7), or the file was deleted since the list was loaded. */
     fun openFailure(name: String, fileGone: Boolean): String =
         if (fileGone) "$name is no longer available." else "No app can open $name."
+
+    /** Confirmation message before permanently deleting a received file from Download/DroidDrop/. */
+    fun deleteConfirmation(name: String): String =
+        "\"$name\" will be permanently deleted from Download/DroidDrop."
+
+    /** Toast when deleting [name] does not succeed; null when it was deleted cleanly. */
+    fun deleteMessage(name: String, result: ReceivedFiles.DeleteResult): String? = when (result) {
+        ReceivedFiles.DeleteResult.DELETED -> null
+        ReceivedFiles.DeleteResult.ALREADY_GONE -> "$name is no longer available."
+        ReceivedFiles.DeleteResult.FAILED -> "Could not delete $name."
+    }
+
+    /** Toast when no app can open Download/DroidDrop/ or Downloads. */
+    fun folderFailure(): String = "No file manager app found."
+
+    /** "JPG · Today 14:02 · 2.4 MB" in the quick-actions sheet header. */
+    fun sheetDetail(name: String, addedMillis: Long, nowMillis: Long, zone: ZoneId, formattedSize: String): String =
+        "${detail(name, addedMillis, nowMillis, zone)} · $formattedSize"
 
     /** "JPG · 14:02" under a day heading on the View all screen, or just the time when the name has no extension. */
     fun timeDetail(name: String, addedMillis: Long, zone: ZoneId): String {

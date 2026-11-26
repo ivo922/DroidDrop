@@ -2,9 +2,9 @@ package dev.ivo.droiddrop
 
 import android.content.ContentValues
 import android.content.Context
-import android.net.Uri
 import android.provider.MediaStore
 import android.webkit.MimeTypeMap
+import androidx.core.net.toUri
 import dev.ivo.droiddrop.core.transfer.Destination
 import java.io.File
 import java.io.IOException
@@ -37,12 +37,7 @@ class DownloadsDestination(private val context: Context) : Destination {
     }
 
     /** Whether the MediaStore row [location] (a uri [save] returned) is still there. False on any failure. */
-    override fun exists(location: String): Boolean = try {
-        context.contentResolver.query(Uri.parse(location), arrayOf(MediaStore.MediaColumns._ID), null, null, null)
-            ?.use { it.moveToFirst() } ?: false
-    } catch (e: Exception) {
-        false
-    }
+    override fun exists(location: String): Boolean = ReceivedFiles.exists(context, location.toUri())
 
     /**
      * The type of the name's own extension (R7), so MediaStore never appends one. The extension starts at the last

@@ -62,11 +62,25 @@ private suspend fun loadThumbnail(context: Context, uri: Uri, px: Int): ImageBit
     }
 }
 
-/** Thumbnail or kind tile, name and detail line, size; row [index] of [count] in the grouped list. The whole row opens the file. */
+/** Thumbnail or kind tile, name and detail line, size; row [index] of [count] in the grouped list. Tap opens, hold shows actions. */
 @Composable
-fun ReceivedFileRow(file: ReceivedFile, nowMillis: Long, onOpen: (ReceivedFile) -> Unit, index: Int, count: Int) {
+fun ReceivedFileRow(
+    file: ReceivedFile,
+    nowMillis: Long,
+    onOpen: (ReceivedFile) -> Unit,
+    onActions: (ReceivedFile) -> Unit,
+    index: Int,
+    count: Int,
+) {
     val context = LocalContext.current
-    SegmentRow(index = index, count = count, onClick = { onOpen(file) }, minHeight = 72.dp) {
+    SegmentRow(
+        index = index,
+        count = count,
+        onClick = { onOpen(file) },
+        onLongClick = { onActions(file) },
+        onLongClickLabel = ReceivedFileText.ACTIONS_LABEL,
+        minHeight = 72.dp,
+    ) {
         FileTile(file)
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(file.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)

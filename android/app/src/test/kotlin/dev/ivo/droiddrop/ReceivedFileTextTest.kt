@@ -76,4 +76,46 @@ class ReceivedFileTextTest {
         assertEquals("JPG · 14:02", ReceivedFileText.timeDetail("IMG_2041.jpg", at("2026-11-13T14:02"), sofia))
         assertEquals("09:15", ReceivedFileText.timeDetail("README", at("2026-11-12T09:15"), sofia))
     }
+
+    @Test
+    fun sheetDetailIncludesSize() {
+        assertEquals(
+            "JPG · Today 14:02 · 2.4 MB",
+            ReceivedFileText.sheetDetail("IMG_2041.jpg", at("2026-11-13T14:02"), now, sofia, "2.4 MB"),
+        )
+        assertEquals(
+            "Yesterday 09:15 · 12 KB",
+            ReceivedFileText.sheetDetail("README", at("2026-11-12T09:15"), now, sofia, "12 KB"),
+        )
+    }
+
+    @Test
+    fun actionMessages() {
+        assertEquals(
+            "\"report.pdf\" will be permanently deleted from Download/DroidDrop.",
+            ReceivedFileText.deleteConfirmation("report.pdf"),
+        )
+        assertEquals(null, ReceivedFileText.deleteMessage("report.pdf", ReceivedFiles.DeleteResult.DELETED))
+        assertEquals(
+            "report.pdf is no longer available.",
+            ReceivedFileText.deleteMessage("report.pdf", ReceivedFiles.DeleteResult.ALREADY_GONE),
+        )
+        assertEquals(
+            "Could not delete report.pdf.",
+            ReceivedFileText.deleteMessage("report.pdf", ReceivedFiles.DeleteResult.FAILED),
+        )
+        assertEquals("No file manager app found.", ReceivedFileText.folderFailure())
+    }
+
+    @Test
+    fun actionLabels() {
+        assertEquals("File actions", ReceivedFileText.ACTIONS_LABEL)
+        assertEquals("Open with", ReceivedFileText.OPEN_WITH_TITLE)
+        assertEquals("Share", ReceivedFileText.ACTION_SHARE)
+        assertEquals("Open with…", ReceivedFileText.ACTION_OPEN_WITH)
+        assertEquals("Open in folder", ReceivedFileText.ACTION_OPEN_FOLDER)
+        assertEquals("Delete", ReceivedFileText.ACTION_DELETE)
+        assertEquals("Delete file?", ReceivedFileText.DELETE_DIALOG_TITLE)
+        assertEquals("Cancel", ReceivedFileText.ACTION_CANCEL)
+    }
 }

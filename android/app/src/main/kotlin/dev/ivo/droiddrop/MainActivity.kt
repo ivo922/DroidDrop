@@ -18,6 +18,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.core.net.toUri
@@ -106,13 +107,24 @@ class MainActivity : ComponentActivity() {
                 val received by receivedFiles.list.snapshot.collectAsStateWithLifecycle()
                 var receivedView by remember { mutableStateOf(receivedViewStore.load()) }
                 var holdClips by remember { mutableStateOf(clipHoldSetting.load()) }
+                var actionFileUri by rememberSaveable { mutableStateOf<String?>(null) }
+                var pendingDeleteUri by rememberSaveable { mutableStateOf<String?>(null) }
+                val files = received?.value
+                val nowMillis = received?.atMillis ?: 0L
+                val loadedUris = remember(files) { files?.mapTo(mutableSetOf()) { it.uri.toString() } }
+                val actionFile = remember(files, actionFileUri) { files?.firstOrNull { it.uri.toString() == actionFileUri } }
+                val pendingDelete = remember(files, pendingDeleteUri) { files?.firstOrNull { it.uri.toString() == pendingDeleteUri } }
+                LaunchedEffect(loadedUris, actionFileUri, pendingDeleteUri) {
+                    actionFileUri = ReceivedFileActions.reconcileSelection(actionFileUri, loadedUris)
+                    pendingDeleteUri = ReceivedFileActions.reconcileSelection(pendingDeleteUri, loadedUris)
+                }
                 // Keeps the main screen's scroll position while View all is open.
                 val screens = rememberSaveableStateHolder()
                 BackHandler(enabled = showAll) { showAll = false }
                 if (showAll) {
                     ReceivedFilesScreen(
-                        received = received?.value,
-                        nowMillis = received?.atMillis ?: 0L,
+                        received = files,
+                        nowMillis = nowMillis,
                         view = receivedView,
                         onViewChange = {
                             receivedView = it
@@ -120,6 +132,7 @@ class MainActivity : ComponentActivity() {
                         },
                         onBack = { showAll = false },
                         onOpen = ::openReceived,
+                        onActions = { actionFileUri = it.uri.toString() },
                     )
                 } else {
                     screens.SaveableStateProvider("main") {
@@ -138,18 +151,47 @@ class MainActivity : ComponentActivity() {
                                 clipHoldSetting.save(it)
                             },
                             onViewAll = { showAll = true },
-                            received = received?.value,
-                            nowMillis = received?.atMillis ?: 0L,
+                            received = files,
+                            nowMillis = nowMillis,
                             onOpen = ::openReceived,
+                            onActions = { actionFileUri = it.uri.toString() },
                         )
                     }
+                }
+                actionFile?.let { file ->
+                    ReceivedFileActionsSheet(
+                        file = file,
+                        nowMillis = nowMillis,
+                        onDismiss = { actionFileUri = null },
+                        onShare = ::shareReceived,
+                        onOpenWith = ::openReceivedWith,
+                        onOpenFolder = ::openReceivedFolder,
+                        onRequestDelete = { pendingDeleteUri = it.uri.toString() },
+                    )
+                }
+                pendingDelete?.let { file ->
+                    DeleteFileDialog(
+                        file = file,
+                        onConfirm = {
+                            if (pendingDeleteUri != null) {
+                                pendingDeleteUri = null
+                                receivedFiles.delete(file)
+                            }
+                        },
+                        onDismiss = { pendingDeleteUri = null },
+                    )
                 }
             }
         }
         // The list follows Download/DroidDrop/: refreshed on resume and whenever a file arrives.
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                Transfers.received.collect { if (it is TransferOutcome.Received) refreshReceived() }
+                launch { Transfers.received.collect { if (it is TransferOutcome.Received) refreshReceived() } }
+                launch {
+                    receivedFiles.messages.collect { message ->
+                        Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+                    }
+                }
             }
         }
     }
@@ -261,19 +303,74 @@ class MainActivity : ComponentActivity() {
     private fun refreshReceived() = receivedFiles.list.refresh()
 
     private fun openReceived(file: ReceivedFile) {
-        val fileGone = try {
-            startActivity(FileViewer.intent(this, file.uri))
-            return
+        scope.launch {
+            val intent = prepareFileIntent(file) { FileViewer.intent(this@MainActivity, file.uri) } ?: return@launch
+            launchFileIntent(file, intent)
+        }
+    }
+
+    private fun openReceivedWith(file: ReceivedFile) =
+        launchExistingFileIntent(file) {
+            val viewIntent = FileViewer.intent(this@MainActivity, file.uri)
+            if (!FileViewer.hasHandler(this@MainActivity, viewIntent)) throw ActivityNotFoundException()
+            FileViewer.openWithIntent(viewIntent)
+        }
+
+    private fun shareReceived(file: ReceivedFile) =
+        launchExistingFileIntent(file) { FileViewer.shareIntent(this@MainActivity, file) }
+
+    /** Verifies the MediaStore row still exists before opening a chooser, and builds the intent off the main thread. */
+    private fun launchExistingFileIntent(file: ReceivedFile, buildIntent: () -> Intent) {
+        scope.launch {
+            val intent = prepareFileIntent(file) {
+                val existence = ReceivedFiles.checkExists(this@MainActivity, file.uri)
+                if (ReceivedFileActions.onExistenceCheck(existence) == ReceivedFileActions.ExistenceDecision.FILE_GONE) {
+                    throw IllegalArgumentException("File gone: ${file.uri}")
+                }
+                buildIntent()
+            } ?: return@launch
+            launchFileIntent(file, intent)
+        }
+    }
+
+    private suspend fun prepareFileIntent(file: ReceivedFile, buildIntent: () -> Intent): Intent? = try {
+        withContext(Dispatchers.IO) { buildIntent() }
+    } catch (e: ActivityNotFoundException) {
+        reportOpenFailure(file, fileGone = false)
+        null
+    } catch (e: SecurityException) {
+        reportOpenFailure(file, fileGone = true)
+        null
+    } catch (e: IllegalArgumentException) {
+        reportOpenFailure(file, fileGone = true)
+        null
+    }
+
+    private fun launchFileIntent(file: ReceivedFile, intent: Intent) {
+        try {
+            startActivity(intent)
         } catch (e: ActivityNotFoundException) {
-            false
+            reportOpenFailure(file, fileGone = false)
         } catch (e: SecurityException) {
             // MediaStore refuses the read grant for a row deleted since the list loaded.
-            true
+            reportOpenFailure(file, fileGone = true)
         } catch (e: IllegalArgumentException) {
-            true
+            reportOpenFailure(file, fileGone = true)
         }
+    }
+
+    private fun reportOpenFailure(file: ReceivedFile, fileGone: Boolean) {
         Toast.makeText(this, ReceivedFileText.openFailure(file.name, fileGone), Toast.LENGTH_LONG).show()
         if (fileGone) refreshReceived()
+    }
+
+    private fun openReceivedFolder() {
+        val opened = ReceivedFileActions.openFolder { target ->
+            runCatching { startActivity(FileViewer.folderIntent(target)) }.isSuccess
+        }
+        if (!opened) {
+            Toast.makeText(this, ReceivedFileText.folderFailure(), Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun requestBatteryExemption() {

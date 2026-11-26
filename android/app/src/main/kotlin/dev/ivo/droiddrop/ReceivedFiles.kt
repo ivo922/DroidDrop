@@ -16,11 +16,41 @@ object ReceivedFiles {
     /** Where DownloadsDestination saves and this lists, spelled as MediaStore stores it (with the trailing slash). */
     const val RELATIVE_PATH = "Download/DroidDrop/"
 
+    /** Document ID of [RELATIVE_PATH] on the external storage DocumentsProvider, for opening it in the Files app. */
+    val FOLDER_DOCUMENT_ID = "primary:${RELATIVE_PATH.trimEnd('/')}"
+
+    /** Outcome of checking whether a received file's MediaStore row still exists. */
+    enum class Existence { EXISTS, GONE, ERROR }
+
+    /** Outcome of deleting a received file from MediaStore. */
+    enum class DeleteResult { DELETED, ALREADY_GONE, FAILED }
+
     /** DATE_ADDED has one-second resolution, so `_id` keeps a multi-file drop in a stable order. */
     const val SORT_ORDER = "${MediaStore.MediaColumns.DATE_ADDED} DESC, ${MediaStore.MediaColumns._ID} DESC"
 
-    /** The app's own non-pending rows there, newest first (R4). Empty on any failure. Blocking. */
-    fun query(context: Context): List<ReceivedFile> = try {
+    /** Distinguishes a present row, a confirmed-absent row, and a transient query failure. Blocking. */
+    fun checkExists(context: Context, uri: Uri): Existence = try {
+        val cursor = context.contentResolver.query(uri, arrayOf(MediaStore.MediaColumns._ID), null, null, null)
+            ?: return Existence.ERROR
+        cursor.use { if (it.moveToFirst()) Existence.EXISTS else Existence.GONE }
+    } catch (e: Exception) {
+        Log.w(TAG, "could not check existence of $uri", e)
+        Existence.ERROR
+    }
+
+    /** Whether the MediaStore row [uri] still exists. False when absent or on failure. Blocking. */
+    fun exists(context: Context, uri: Uri): Boolean = checkExists(context, uri) == Existence.EXISTS
+
+    /** Deletes one of the app's own MediaStore rows from Download/DroidDrop/. Blocking. */
+    fun delete(context: Context, uri: Uri): DeleteResult = try {
+        if (context.contentResolver.delete(uri, null, null) > 0) DeleteResult.DELETED else DeleteResult.ALREADY_GONE
+    } catch (e: Exception) {
+        Log.w(TAG, "could not delete $uri", e)
+        DeleteResult.FAILED
+    }
+
+    /** The app's own non-pending rows there, newest first (R4). Null on query failure so callers can keep prior data. Blocking. */
+    fun query(context: Context): List<ReceivedFile>? = try {
         val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         val columns = arrayOf(
             MediaStore.MediaColumns._ID,
@@ -44,9 +74,9 @@ object ReceivedFiles {
                     )
                 }
             }
-        } ?: emptyList()
+        }
     } catch (e: Exception) {
         Log.w(TAG, "could not list received files", e)
-        emptyList()
+        null
     }
 }

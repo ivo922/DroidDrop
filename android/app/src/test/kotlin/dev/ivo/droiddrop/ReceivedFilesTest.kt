@@ -15,4 +15,9 @@ class ReceivedFilesTest {
         // DATE_ADDED has one-second resolution: files of one multi-file drop must not swap places between refreshes.
         assertEquals("date_added DESC, _id DESC", ReceivedFiles.SORT_ORDER)
     }
+
+    @Test
+    fun folderDocumentIdMatchesRelativePath() {
+        assertEquals("primary:Download/DroidDrop", ReceivedFiles.FOLDER_DOCUMENT_ID)
+    }
 }

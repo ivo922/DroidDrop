@@ -2,6 +2,7 @@ package dev.ivo.droiddrop
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -69,6 +70,7 @@ fun MainScreen(
     received: List<ReceivedFile>?,
     nowMillis: Long,
     onOpen: (ReceivedFile) -> Unit,
+    onActions: (ReceivedFile) -> Unit,
 ) {
     Scaffold { insets ->
         val direction = LocalLayoutDirection.current
@@ -158,7 +160,7 @@ fun MainScreen(
             // One "now" for the whole list (stamped at the last refresh), so rows agree on Today and Yesterday.
             val files = received.orEmpty().take(RECENT_FILES)
             itemsIndexed(files, key = { _, file -> file.uri }) { index, file ->
-                ReceivedFileRow(file, nowMillis, onOpen, index = index, count = files.size)
+                ReceivedFileRow(file, nowMillis, onOpen, onActions, index = index, count = files.size)
             }
         }
     }
@@ -281,26 +283,38 @@ fun RowIcon(icon: Int, size: Dp = 24.dp, tint: Color = MaterialTheme.colorScheme
 
 /**
  * One row of a grouped list: rows sit 2dp apart and only the group's outer corners are rounded. Clickable when
- * [onClick] is set.
+ * [onClick] is set, with optional press-and-hold via [onLongClick].
  */
 @Composable
 fun SegmentRow(
     index: Int,
     count: Int,
     onClick: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
+    onLongClickLabel: String? = null,
     minHeight: Dp = 56.dp,
     /** With [onToggle], the whole row is one switch for accessibility (TalkBack reads label, text and state once). */
     checked: Boolean = false,
     onToggle: ((Boolean) -> Unit)? = null,
     content: @Composable RowScope.() -> Unit,
 ) {
+    require(onLongClick == null || onClick != null) { "SegmentRow requires onClick when onLongClick is set" }
+    val clickModifier = when {
+        onClick != null && onLongClick != null -> Modifier.combinedClickable(
+            onClick = onClick,
+            onLongClick = onLongClick,
+            onLongClickLabel = onLongClickLabel,
+        )
+        onClick != null -> Modifier.clickable(onClick = onClick)
+        else -> Modifier
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(bottom = if (index < count - 1) 2.dp else 0.dp)
             .clip(segmentShape(index, count))
             .background(MaterialTheme.colorScheme.surfaceContainer)
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(clickModifier)
             .then(if (onToggle != null) Modifier.toggleable(value = checked, role = Role.Switch, onValueChange = onToggle) else Modifier)
             .heightIn(min = minHeight)
             .padding(horizontal = 16.dp, vertical = 8.dp),
