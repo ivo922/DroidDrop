@@ -210,25 +210,26 @@ import Testing
     }
 
     @Test func silentPairedClientIsClosedAfterIdleTimeout() async throws {
-        let (server, port) = try await makeServer(idleTimeout: 0.5)
+        // Long enough that a slow runner finishes pairing first; the bound below stays far under the 90 s default.
+        let (server, port) = try await makeServer(idleTimeout: 2)
         defer { server.stop() }
         let (_, events) = try await pair(server, port: port)
 
         let started = ContinuousClock.now
         try await events.expectClosed()
-        #expect(ContinuousClock.now - started < .seconds(3))
+        #expect(ContinuousClock.now - started < .seconds(10))
         #expect(server.connectedPeers().isEmpty)
     }
 
     // The dev CLI or another app may hold 47321: the server must take another port and advertise it.
     @Test func fallsBackToAnotherPortWhenTaken() async throws {
         let blocker = try NWListener(using: .tcp, on: .any)
-        let blockerReady = DispatchSemaphore(value: 0)
-        blocker.stateUpdateHandler = { if case .ready = $0 { blockerReady.signal() } }
+        let blockerReady = Recorded<Bool>()
+        blocker.stateUpdateHandler = { if case .ready = $0 { blockerReady.append(true) } }
         blocker.newConnectionHandler = { $0.cancel() }
         blocker.start(queue: DispatchQueue(label: "test.blocker"))
         defer { blocker.cancel() }
-        #expect(blockerReady.wait(timeout: .now() + 5) == .success)
+        try await eventually { !blockerReady.values.isEmpty }
         let taken = try #require(blocker.port?.rawValue)
 
         let server = DroidDropServer(
@@ -261,11 +262,11 @@ import Testing
     // fall back to an OS-assigned one as a port taken at startup does.
     @Test func failedListenerOnAFixedPortComesBackOnIt() async throws {
         let probe = try NWListener(using: .tcp, on: .any)
-        let probed = DispatchSemaphore(value: 0)
-        probe.stateUpdateHandler = { if case .ready = $0 { probed.signal() } }
+        let probed = Recorded<Bool>()
+        probe.stateUpdateHandler = { if case .ready = $0 { probed.append(true) } }
         probe.newConnectionHandler = { $0.cancel() }
         probe.start(queue: DispatchQueue(label: "test.probe"))
-        #expect(probed.wait(timeout: .now() + 5) == .success)
+        try await eventually { !probed.values.isEmpty }
         let fixed = try #require(probe.port?.rawValue)
         probe.cancel()
         try await Task.sleep(for: .milliseconds(200))
@@ -315,7 +316,7 @@ import Testing
         #expect(try await events.nextMessage() == .hello(v: 1, name: "Test Mac", platform: .macos))
         let started = ContinuousClock.now
         try await events.expectClosed()
-        #expect(ContinuousClock.now - started < .seconds(3))
+        #expect(ContinuousClock.now - started < .seconds(10))  // under the 15 s default, with room for a slow runner
     }
 
     // One device cannot take more than `pendingPerHost` unauthenticated sockets, so it cannot lock out the phone's.

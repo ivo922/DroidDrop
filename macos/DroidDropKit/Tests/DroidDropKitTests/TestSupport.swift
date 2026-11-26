@@ -24,12 +24,7 @@ final class EventRecorder: @unchecked Sendable {
     }
 
     func next(timeout: TimeInterval = 5) async throws -> FramedConnection.Event {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if let event = lock.withLock({ events.isEmpty ? nil : events.removeFirst() }) { return event }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        throw TimeoutError()
+        try await poll(timeout: timeout) { lock.withLock { events.isEmpty ? nil : events.removeFirst() } }
     }
 
     func nextMessage() async throws -> Message {
@@ -84,13 +79,21 @@ final class Recorded<Value>: @unchecked Sendable {
     func append(_ value: Value) { lock.withLock { stored.append(value) } }
 }
 
-/// Polls `condition` every 10 ms until it holds; throws `TimeoutError` after `timeout`.
-func eventually(timeout: TimeInterval = 5, _ condition: () -> Bool) async throws {
+/// Polls `take` every 10 ms until it returns a value; throws `TimeoutError` after `timeout`.
+/// It always looks once more after the deadline: a test task starved of threads on a busy CI runner can wake up long
+/// after the deadline, and the value may have arrived meanwhile.
+func poll<T>(timeout: TimeInterval = 5, _ take: () -> T?) async throws -> T {
     let deadline = Date().addingTimeInterval(timeout)
-    while !condition() {
+    while true {
+        if let value = take() { return value }
         guard Date() < deadline else { throw TimeoutError() }
         try await Task.sleep(for: .milliseconds(10))
     }
+}
+
+/// Polls `condition` every 10 ms until it holds; throws `TimeoutError` after `timeout`.
+func eventually(timeout: TimeInterval = 5, _ condition: () -> Bool) async throws {
+    try await poll(timeout: timeout) { condition() ? () : nil }
 }
 
 /// A plain TCP connection that never starts TLS, like a silent device on the LAN. `closed` once the server drops it.
