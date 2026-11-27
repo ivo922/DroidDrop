@@ -57,6 +57,7 @@ androidComponents {
 
 dependencies {
     implementation(project(":core"))
+    implementation(libs.kotlinx.serialization.json)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.activity.compose)

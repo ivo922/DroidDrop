@@ -38,6 +38,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 class MainActivity : ComponentActivity() {
     private val scope = MainScope()
@@ -45,8 +46,10 @@ class MainActivity : ComponentActivity() {
     private var showAll by mutableStateOf(false)
     private var scanAfterLocalNetworkGrant = false
     private var permissionRequestOpen = false
+    private var pendingInstallApk: File? = null
     private lateinit var store: PairingStore
     private val receivedFiles: ReceivedFilesModel by viewModels()
+    private val updateModel: UpdateModel by viewModels()
     private val clipboard by lazy { getSystemService(ClipboardManager::class.java) }
     private val receivedViewStore by lazy { ReceivedViewStore(this) }
     private val clipHoldSetting by lazy { ClipHoldSetting(this) }
@@ -79,6 +82,17 @@ class MainActivity : ComponentActivity() {
         if (uris.isNotEmpty()) OutgoingFiles.send(this, uris)
     }
 
+    private val unknownSourcesSettings = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        val apk = pendingInstallApk ?: return@registerForActivityResult
+        if (packageManager.canRequestPackageInstalls() && apk.exists()) {
+            pendingInstallApk = null
+            startApkInstaller(apk)
+        } else {
+            pendingInstallApk = null
+            Toast.makeText(this, "Allow installing unknown apps for DroidDrop to finish updating.", Toast.LENGTH_LONG).show()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -104,6 +118,7 @@ class MainActivity : ComponentActivity() {
                     phoneCode = code
                 }
                 val paired = remember(state) { store.load() != null }
+                val updateState by updateModel.state.collectAsStateWithLifecycle()
                 val received by receivedFiles.list.snapshot.collectAsStateWithLifecycle()
                 var receivedView by remember { mutableStateOf(receivedViewStore.load()) }
                 var holdClips by remember { mutableStateOf(clipHoldSetting.load()) }
@@ -140,6 +155,11 @@ class MainActivity : ComponentActivity() {
                             state = state,
                             paired = paired,
                             phoneCode = phoneCode,
+                            currentVersion = updateModel.currentVersionName,
+                            updateState = updateState,
+                            onCheckUpdates = updateModel::checkManually,
+                            onDownloadUpdate = updateModel::downloadUpdate,
+                            onDismissUpdate = updateModel::dismissBanner,
                             onPair = ::scanPairingCode,
                             onSendFiles = { filePicker.launch(arrayOf("*/*")) },
                             onSendClipboard = ::sendClipboard,
@@ -192,6 +212,16 @@ class MainActivity : ComponentActivity() {
                         Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
                     }
                 }
+                launch {
+                    updateModel.messages.collect { message ->
+                        Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+                    }
+                }
+                launch {
+                    updateModel.installRequests.collect { apk ->
+                        installUpdateApk(apk)
+                    }
+                }
             }
         }
     }
@@ -199,6 +229,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refreshReceived()
+        updateModel.checkIfDue()
         clipboard.addPrimaryClipChangedListener(clipListener)
         if (LocalNetwork.allowed(this)) {
             resumeSavedConnection()
@@ -375,6 +406,24 @@ class MainActivity : ComponentActivity() {
 
     private fun requestBatteryExemption() {
         startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, "package:$packageName".toUri()))
+    }
+
+    private fun installUpdateApk(apk: File) {
+        if (!packageManager.canRequestPackageInstalls()) {
+            pendingInstallApk = apk
+            val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, "package:$packageName".toUri())
+            unknownSourcesSettings.launch(intent)
+            return
+        }
+        startApkInstaller(apk)
+    }
+
+    private fun startApkInstaller(apk: File) {
+        try {
+            startActivity(AppUpdater.installIntent(this, apk))
+        } catch (e: Exception) {
+            Toast.makeText(this, "Could not start package installer: ${e.message}", Toast.LENGTH_LONG).show()
+        }
     }
 
     companion object {

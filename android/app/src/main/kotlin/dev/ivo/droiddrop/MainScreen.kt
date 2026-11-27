@@ -28,6 +28,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -59,6 +60,11 @@ fun MainScreen(
     state: ConnectionState,
     paired: Boolean,
     phoneCode: String,
+    currentVersion: String,
+    updateState: UpdateUiState,
+    onCheckUpdates: () -> Unit,
+    onDownloadUpdate: (UpdateManifest) -> Unit,
+    onDismissUpdate: (UpdateManifest) -> Unit,
     onPair: () -> Unit,
     onSendFiles: () -> Unit,
     onSendClipboard: () -> Unit,
@@ -92,9 +98,19 @@ fun MainScreen(
                 )
             }
             item { StatusCard(state, paired, onPair, onSendFiles, onSendClipboard) }
+            if (shouldRenderUpdateBanner(updateState)) {
+                item {
+                    UpdateBannerCard(
+                        state = updateState,
+                        onDownload = onDownloadUpdate,
+                        onDismiss = onDismissUpdate,
+                        modifier = Modifier.padding(top = 12.dp),
+                    )
+                }
+            }
 
             item { SectionHeader("This phone") }
-            val settings = if (paired) 4 else 3
+            val settings = if (paired) 5 else 4
             item {
                 SegmentRow(index = 0, count = settings, minHeight = 64.dp) {
                     RowIcon(R.drawable.ic_phone)
@@ -134,9 +150,30 @@ fun MainScreen(
                     Switch(checked = holdClips, onCheckedChange = null) // the row handles the toggle
                 }
             }
+            item {
+                val subtitle = when (updateState) {
+                    UpdateUiState.Checking -> "Checking for updates…"
+                    is UpdateUiState.Available -> "Version ${updateState.manifest.version} available"
+                    is UpdateUiState.Downloading -> "Downloading ${(updateState.progress * 100).toInt()}%…"
+                    is UpdateUiState.Error -> "Version $currentVersion · Check failed"
+                    UpdateUiState.Idle -> "Version $currentVersion"
+                }
+                SegmentRow(index = 3, count = settings, minHeight = 64.dp, onClick = onCheckUpdates) {
+                    RowIcon(R.drawable.ic_update)
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.weight(1f)) {
+                        Text("App updates", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            subtitle,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    RowIcon(R.drawable.ic_chevron_right, size = 20.dp)
+                }
+            }
             if (paired) {
                 item {
-                    SegmentRow(index = 3, count = settings, onClick = onUnpair) {
+                    SegmentRow(index = 4, count = settings, onClick = onUnpair) {
                         RowIcon(R.drawable.ic_unlink, tint = MaterialTheme.colorScheme.error)
                         Text("Unpair", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.error)
                     }
@@ -161,6 +198,90 @@ fun MainScreen(
             val files = received.orEmpty().take(RECENT_FILES)
             itemsIndexed(files, key = { _, file -> file.uri }) { index, file ->
                 ReceivedFileRow(file, nowMillis, onOpen, onActions, index = index, count = files.size)
+            }
+        }
+    }
+}
+
+private fun shouldRenderUpdateBanner(state: UpdateUiState): Boolean = when (state) {
+    is UpdateUiState.Available -> state.showBanner
+    is UpdateUiState.Downloading -> true
+    is UpdateUiState.Error -> state.manifest != null
+    UpdateUiState.Idle, UpdateUiState.Checking -> false
+}
+
+@Composable
+private fun UpdateBannerCard(
+    state: UpdateUiState,
+    onDownload: (UpdateManifest) -> Unit,
+    onDismiss: (UpdateManifest) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val manifest = when (state) {
+        is UpdateUiState.Available -> state.manifest
+        is UpdateUiState.Downloading -> state.manifest
+        is UpdateUiState.Error -> state.manifest ?: return
+        else -> return
+    }
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RowIcon(R.drawable.ic_update, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                Text(
+                    "Update available · v${manifest.version}",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+            }
+            if (manifest.notes.isNotBlank()) {
+                Text(
+                    manifest.notes,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    maxLines = 6,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            when (state) {
+                is UpdateUiState.Downloading -> {
+                    LinearProgressIndicator(
+                        progress = { state.progress },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "Downloading… ${(state.progress * 100).toInt()}%",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                }
+                is UpdateUiState.Error -> {
+                    Text(
+                        state.message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { onDownload(manifest) }) { Text("Retry") }
+                        TextButton(onClick = { onDismiss(manifest) }) { Text("Later") }
+                    }
+                }
+                is UpdateUiState.Available -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { onDownload(manifest) }) { Text("Update") }
+                        TextButton(onClick = { onDismiss(manifest) }) { Text("Later") }
+                    }
+                }
+                else -> Unit
             }
         }
     }
