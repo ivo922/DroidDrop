@@ -219,6 +219,20 @@ final class AppModel: ObservableObject {
         transfers?.cancelAllSending()
     }
 
+    /// Up to the 10 most recently received files in `receivedFilesFolder`, newest first.
+    func recentReceivedFiles() -> [URL] {
+        ReceivedFiles.recent(in: receivedFilesFolder)
+    }
+
+    /// Opens a received file with its default app. Returns the message to show on failure.
+    @discardableResult
+    func openReceivedFile(_ url: URL) -> String? {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return "\(url.lastPathComponent) is no longer in the received files folder."
+        }
+        return NSWorkspace.shared.open(url) ? nil : "Could not open \(url.lastPathComponent)."
+    }
+
     /// Creates the folder if missing (nothing received yet) and opens it in Finder. Returns the message to show on failure.
     @discardableResult
     func openReceivedFiles() -> String? {

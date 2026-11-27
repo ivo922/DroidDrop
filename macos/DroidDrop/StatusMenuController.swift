@@ -14,6 +14,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate, NSMenuItemValidation
     /// A transfer shows at most an incoming and an outgoing line. Fixed slots let an open menu update live.
     private let transferItems = [NSMenuItem(), NSMenuItem()]
     private let cancelSendingItem = NSMenuItem()
+    private weak var receivedFilesMenu: NSMenu?
 
     init(model: AppModel) {
         self.model = model
@@ -40,6 +41,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate, NSMenuItemValidation
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        if menu === receivedFilesMenu {
+            populateReceivedFiles(menu)
+            return
+        }
         menu.removeAllItems()
         menu.addItem(disabled(model.statusLine))
         if let error = model.serverError { menu.addItem(disabled("Error: \(error)")) }
@@ -52,7 +57,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate, NSMenuItemValidation
         showTransfers(model.transferLines, isSending: model.isSending)
         menu.addItem(item("Send Files…", #selector(sendFiles)))
         menu.addItem(cancelSendingItem)
-        menu.addItem(item("Open Received Files", #selector(openReceivedFiles)))
+        let received = NSMenuItem(title: "Received Files", action: nil, keyEquivalent: "")
+        let receivedSubmenu = NSMenu()
+        receivedSubmenu.delegate = self
+        received.submenu = receivedSubmenu
+        receivedFilesMenu = receivedSubmenu
+        menu.addItem(received)
         menu.addItem(.separator())
 
         menu.addItem(item("Pair New Phone…", #selector(pair)))
@@ -108,11 +118,43 @@ final class StatusMenuController: NSObject, NSMenuDelegate, NSMenuItemValidation
         model.sendFiles(panel.urls)
     }
 
+    private func populateReceivedFiles(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let files = model.recentReceivedFiles()
+        if files.isEmpty {
+            menu.addItem(disabled("No received files"))
+        } else {
+            for url in files {
+                let name = url.lastPathComponent
+                let title = ReceivedFiles.menuTitle(for: name)
+                let fileItem = item(title, #selector(openReceivedFile(_:)))
+                fileItem.representedObject = url
+                if title != name { fileItem.toolTip = name }
+                if let icon = NSWorkspace.shared.icon(forFile: url.path).copy() as? NSImage {
+                    icon.size = NSSize(width: 16, height: 16)
+                    fileItem.image = icon
+                }
+                menu.addItem(fileItem)
+            }
+        }
+        menu.addItem(.separator())
+        menu.addItem(item("Open in Finder…", #selector(openReceivedFiles)))
+    }
+
     /// Also Show in Finder's fallback when none of a batch's files is left.
     @objc func openReceivedFiles() {
         guard let message = model.openReceivedFiles() else { return }
         let alert = NSAlert()
         alert.messageText = "Could not open the received files folder"
+        alert.informativeText = message
+        present(alert)
+    }
+
+    @objc private func openReceivedFile(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        guard let message = model.openReceivedFile(url) else { return }
+        let alert = NSAlert()
+        alert.messageText = "Could not open file"
         alert.informativeText = message
         present(alert)
     }

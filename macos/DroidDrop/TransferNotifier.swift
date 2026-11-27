@@ -19,7 +19,7 @@ final class TransferNotifier: NSObject, UNUserNotificationCenterDelegate {
 
     /// Set by `AppModel`: Retry resends the failed files to the stored fingerprint.
     var onRetry: (([URL], Data) -> Void)?
-    /// Set by `AppDelegate`: "Open Received Files", which Show in Finder falls back to (one path, one error alert).
+    /// Set by `AppDelegate`: "Received Files › Open in Finder…", which Show in Finder falls back to (one path, one error alert).
     var onOpenReceivedFolder: (() -> Void)?
 
     /// Registers the category and asks for permission. Denial is fine: transfers still work, silently.
