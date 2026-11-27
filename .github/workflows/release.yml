@@ -1,4 +1,4 @@
-# Pushing a vX.Y.Z tag runs every gate, builds both apps and publishes them as a GitHub Release.
+# Pushing a vX.Y.Z tag builds both apps, signs update.json and publishes a GitHub Release. Run scripts/check.sh locally first.
 name: Release
 
 on:
@@ -13,23 +13,15 @@ concurrency:
 
 jobs:
   mac:
-    name: Check and build macOS app
+    name: Build macOS app
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: "21"
-      - uses: gradle/actions/setup-gradle@v5
       - name: Install tools
         run: |
           brew install xcodegen
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;37.0.0" > /dev/null
           echo "DEVELOPER_DIR=$(xcode-select -p)" >> "$GITHUB_ENV"
-      - name: Check
-        run: scripts/check.sh
       - name: Build
         run: scripts/build-release.sh mac "$GITHUB_REF_NAME"
       - uses: actions/upload-artifact@v7

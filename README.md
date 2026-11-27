@@ -32,7 +32,7 @@ different key, so the release can't install over it.
 
 ## Release
 
-Push a `vX.Y.Z` tag. [`release.yml`](.github/workflows/release.yml) runs `scripts/check.sh`, builds both apps with
+Run `scripts/check.sh` locally, then push a `vX.Y.Z` tag. [`release.yml`](.github/workflows/release.yml) builds both apps with
 `scripts/build-release.sh`, signs `update.json` with `scripts/build-update-manifest.sh` and publishes them as a GitHub
 Release. The tag sets the version (`scripts/release-version.sh`).
 The APK is signed with the release key from the `DROIDDROP_KEYSTORE_BASE64` and `DROIDDROP_KEYSTORE_PASSWORD` secrets,
