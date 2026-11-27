@@ -8,6 +8,7 @@ import UserNotifications
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var model: AppModel?
+    private var updater: UpdateController?
     private var statusMenu: StatusMenuController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -18,10 +19,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             notifier.requestAuthorization()
             let model = try AppModel(notifier: notifier)
             self.model = model
-            let statusMenu = StatusMenuController(model: model)
+            let updater = UpdateController()
+            self.updater = updater
+            let statusMenu = StatusMenuController(model: model, updater: updater)
             self.statusMenu = statusMenu
             notifier.onOpenReceivedFolder = { [weak statusMenu] in statusMenu?.openReceivedFiles() }
             applyLoginItemDefault()
+            updater.startAutomaticChecks()
         } catch {
             let alert = NSAlert()
             alert.messageText = "DroidDrop could not start"

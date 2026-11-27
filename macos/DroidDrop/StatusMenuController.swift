@@ -6,8 +6,10 @@ import ServiceManagement
 @MainActor
 final class StatusMenuController: NSObject, NSMenuDelegate, NSMenuItemValidation {
     private let model: AppModel
+    private let updater: UpdateController
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let pairingWindow: PairingWindowController
+    private let updateWindow: UpdateWindowController
     private let dropTarget: StatusDropTarget
     private var subscription: AnyCancellable?
     private var transferSubscription: AnyCancellable?
@@ -16,11 +18,20 @@ final class StatusMenuController: NSObject, NSMenuDelegate, NSMenuItemValidation
     private let cancelSendingItem = NSMenuItem()
     private weak var receivedFilesMenu: NSMenu?
 
-    init(model: AppModel) {
+    init(model: AppModel, updater: UpdateController) {
         self.model = model
+        self.updater = updater
         pairingWindow = PairingWindowController(model: model)
+        updateWindow = UpdateWindowController(updater: updater)
         dropTarget = StatusDropTarget(model: model)
         super.init()
+        updater.onOpenWindow = { [weak self] in self?.updateWindow.show() }
+        updater.onAlert = { [weak self] title, message in
+            let alert = NSAlert()
+            alert.messageText = title
+            alert.informativeText = message
+            self?.present(alert)
+        }
         cancelSendingItem.title = "Cancel Sending"
         cancelSendingItem.action = #selector(cancelSending)
         cancelSendingItem.target = self
@@ -90,6 +101,20 @@ final class StatusMenuController: NSObject, NSMenuDelegate, NSMenuItemValidation
         let login = item("Launch at Login", #selector(toggleLaunchAtLogin))
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(login)
+        if let update = updater.availableUpdate {
+            menu.addItem(item("Update Available (\(update.version))…", #selector(showUpdateWindow)))
+        } else {
+            let checkTitle: String
+            switch updater.status {
+            case .checking: checkTitle = "Checking for Updates…"
+            case .downloading(_, let progress): checkTitle = "Downloading Update (\(Int(progress * 100))%)…"
+            case .installing: checkTitle = "Installing Update…"
+            default: checkTitle = "Check for Updates…"
+            }
+            let checkItem = item(checkTitle, #selector(checkForUpdates))
+            checkItem.isEnabled = !updater.isBusy
+            menu.addItem(checkItem)
+        }
         menu.addItem(disabled("Mac code: \(model.macCode)"))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit DroidDrop", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
@@ -97,7 +122,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate, NSMenuItemValidation
 
     /// Sending needs a connected phone (R6).
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        menuItem.action == #selector(sendFiles) ? model.canSendFiles : true
+        if menuItem.action == #selector(sendFiles) { return model.canSendFiles }
+        if menuItem.action == #selector(checkForUpdates) { return !updater.isBusy }
+        return true
     }
 
     private func showTransfers(_ lines: [String], isSending: Bool) {
@@ -193,6 +220,14 @@ final class StatusMenuController: NSObject, NSMenuDelegate, NSMenuItemValidation
             let alert = NSAlert(error: error)
             present(alert)
         }
+    }
+
+    @objc private func checkForUpdates() {
+        updater.checkManually()
+    }
+
+    @objc private func showUpdateWindow() {
+        updater.openUpdateWindow()
     }
 
     private func updateIcon() {
