@@ -77,6 +77,11 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: Build signed update manifest
+        env:
+          DROIDDROP_UPDATE_KEY_BASE64: ${{ secrets.DROIDDROP_UPDATE_KEY_BASE64 }}
+          DROIDDROP_UPDATE_PUBLIC_KEY_BASE64: BEtFvQOnEd+q/MbtBU8cm5bs27MOALwEy8UwsfM7z+4=
+        run: scripts/build-update-manifest.sh "$GITHUB_REF_NAME" dist
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
