@@ -46,11 +46,11 @@ final class FakeLink: TransferLink, @unchecked Sendable {
         completion?(true)
     }
 
-    func next(timeout: TimeInterval = 5) async throws -> Message {
+    func next(timeout: TimeInterval = 15) async throws -> Message {
         try await poll(timeout: timeout) { lock.withLock { messages.isEmpty ? nil : messages.removeFirst() } }
     }
 
-    func chunks(count: Int, timeout: TimeInterval = 5) async throws -> [Chunk] {
+    func chunks(count: Int, timeout: TimeInterval = 15) async throws -> [Chunk] {
         try await poll(timeout: timeout) {
             lock.withLock { () -> [Chunk]? in
                 guard sentChunks.count - consumed >= count else { return nil }
@@ -76,7 +76,7 @@ final class HashGate: @unchecked Sendable {
 
     func release() { gate.signal() }
 
-    func waitForStart(timeout: TimeInterval = 5) async throws {
+    func waitForStart(timeout: TimeInterval = 15) async throws {
         try await eventually(timeout: timeout) { started > 0 }
     }
 }

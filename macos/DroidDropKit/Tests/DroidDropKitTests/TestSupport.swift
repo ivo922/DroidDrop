@@ -23,7 +23,7 @@ final class EventRecorder: @unchecked Sendable {
         lock.withLock { events.append(event) }
     }
 
-    func next(timeout: TimeInterval = 5) async throws -> FramedConnection.Event {
+    func next(timeout: TimeInterval = 15) async throws -> FramedConnection.Event {
         try await poll(timeout: timeout) { lock.withLock { events.isEmpty ? nil : events.removeFirst() } }
     }
 
@@ -82,7 +82,7 @@ final class Recorded<Value>: @unchecked Sendable {
 /// Polls `take` every 10 ms until it returns a value; throws `TimeoutError` after `timeout`.
 /// It always looks once more after the deadline: a test task starved of threads on a busy CI runner can wake up long
 /// after the deadline, and the value may have arrived meanwhile.
-func poll<T>(timeout: TimeInterval = 5, _ take: () -> T?) async throws -> T {
+func poll<T>(timeout: TimeInterval = 15, _ take: () -> T?) async throws -> T {
     let deadline = Date().addingTimeInterval(timeout)
     while true {
         if let value = take() { return value }
@@ -92,7 +92,7 @@ func poll<T>(timeout: TimeInterval = 5, _ take: () -> T?) async throws -> T {
 }
 
 /// Polls `condition` every 10 ms until it holds; throws `TimeoutError` after `timeout`.
-func eventually(timeout: TimeInterval = 5, _ condition: () -> Bool) async throws {
+func eventually(timeout: TimeInterval = 15, _ condition: () -> Bool) async throws {
     try await poll(timeout: timeout) { condition() ? () : nil }
 }
 

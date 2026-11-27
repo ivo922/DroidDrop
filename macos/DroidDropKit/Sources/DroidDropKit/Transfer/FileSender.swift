@@ -14,7 +14,7 @@ public protocol TransferLink: AnyObject {
 }
 
 /// Outbound queue to one peer (SPEC §9). Every method must be called on `queue`; callbacks run on it.
-/// All state is confined to `queue`. Blocking file reads happen on it; hashing runs on a global utility queue.
+/// All state is confined to `queue`. Blocking file reads happen on it; hashing runs on a global user-initiated queue.
 public final class FileSender: @unchecked Sendable {
     public static let chunkSize = FrameLimits.maxChunkData
     /// Chunks handed to the link whose completion has not arrived.
@@ -236,7 +236,7 @@ public final class FileSender: @unchecked Sendable {
         let serial = head.serial
         let queue = queue
         let hash = hash
-        DispatchQueue.global(qos: .utility).async { [weak self] in
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = Result { try hash(url) }
             queue.async { self?.digested(result, serial: serial) }
         }
