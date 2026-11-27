@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 — 2026-11-27
+
+### macOS
+- Added built-in in-app updates with silent daily checks, **Check for Updates…** in the menu bar, Ed25519 signature + SHA-256 verification, and atomic update & relaunch.
+
+### Android
+- Added built-in in-app updates with silent daily checks, an update banner and **App updates** row, Ed25519 signature + SHA-256 verification, and direct APK installation.
+
 ## 0.3.0 — 2026-11-27
 
 ### macOS
